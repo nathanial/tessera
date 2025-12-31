@@ -35,13 +35,18 @@ export class TileManager {
     return `${z}/${x}/${y}`;
   }
 
-  /** Get OSM tile URL */
+  /** Carto subdomains for load balancing */
+  private static readonly SUBDOMAINS = ["a", "b", "c", "d"];
+
+  /** Get Carto Voyager retina tile URL */
   private getTileUrl(z: number, x: number, y: number): string {
-    return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    // Round-robin through subdomains based on tile coords
+    const subdomain = TileManager.SUBDOMAINS[(x + y) % TileManager.SUBDOMAINS.length]!;
+    return `https://${subdomain}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}@2x.png`;
   }
 
-  /** Tile size in CSS pixels (standard for web maps) */
-  static readonly TILE_SIZE = 256;
+  /** Tile size in CSS pixels (512 for @2x retina tiles) */
+  static readonly TILE_SIZE = 512;
 
   /** Get visible tile coordinates for the current view */
   getVisibleTiles(

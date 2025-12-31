@@ -12,8 +12,8 @@ export class Camera {
   /** Zoom level (0 = world fits in view, higher = more zoomed in) */
   zoom = 0;
 
-  /** Tile size in CSS pixels (standard for web maps) */
-  static readonly TILE_SIZE = 256;
+  /** Tile size in CSS pixels (512 for @2x retina tiles) */
+  static readonly TILE_SIZE = 512;
 
   /** Get the view-projection matrix for rendering */
   getMatrix(viewportWidth: number, viewportHeight: number): Mat3 {

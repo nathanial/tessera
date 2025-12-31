@@ -27,8 +27,8 @@ describe("TileManager", () => {
       const gl = createMockGL();
       const tm = new TileManager(gl);
 
-      // At zoom 0, world is 256px, viewport 256x256 shows the whole world (1 tile)
-      const tiles = tm.getVisibleTiles(0.5, 0.5, 0, 256, 256);
+      // At zoom 0, world is 512px (one 512px tile), viewport 512x512 shows the whole world
+      const tiles = tm.getVisibleTiles(0.5, 0.5, 0, 512, 512);
 
       expect(tiles.length).toBeGreaterThan(0);
       expect(tiles.some(t => t.z === 0 && t.x === 0 && t.y === 0)).toBe(true);
@@ -38,9 +38,9 @@ describe("TileManager", () => {
       const gl = createMockGL();
       const tm = new TileManager(gl);
 
-      // At zoom 1, world is 512px (2x2 tiles at 256px each)
-      // With 256x256 viewport centered at (0.25, 0.25), we should see tile (0, 0)
-      const tiles = tm.getVisibleTiles(0.25, 0.25, 1, 256, 256);
+      // At zoom 1, world is 1024px (2x2 tiles at 512px each)
+      // With 512x512 viewport centered at (0.25, 0.25), we should see tile (0, 0)
+      const tiles = tm.getVisibleTiles(0.25, 0.25, 1, 512, 512);
 
       expect(tiles.some(t => t.z === 1 && t.x === 0 && t.y === 0)).toBe(true);
     });
@@ -49,9 +49,9 @@ describe("TileManager", () => {
       const gl = createMockGL();
       const tm = new TileManager(gl);
 
-      // At zoom 2, world is 1024px (4x4 tiles)
-      // With 1024x1024 viewport, we see the whole world = 16 tiles
-      const tiles = tm.getVisibleTiles(0.5, 0.5, 2, 1024, 1024);
+      // At zoom 2, world is 2048px (4x4 tiles at 512px each)
+      // With 2048x2048 viewport, we see the whole world = 16 tiles
+      const tiles = tm.getVisibleTiles(0.5, 0.5, 2, 2048, 2048);
 
       expect(tiles.length).toBeGreaterThan(1);
     });

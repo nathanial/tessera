@@ -31,9 +31,9 @@ describe("Camera", () => {
       const cam = new Camera();
       cam.centerX = 0.5;
       cam.centerY = 0.5;
-      cam.zoom = 2; // At zoom 2, world is 1024px, viewport 256x256 shows 1/4 of world
+      cam.zoom = 2; // At zoom 2, world is 2048px (512 * 4), viewport 512x512 shows 1/4 of world
 
-      const m = cam.getMatrix(256, 256); // viewport matches tile size
+      const m = cam.getMatrix(512, 512); // viewport matches tile size
 
       // Transform point (0.5, 0.5) - should map to (0, 0) in clip space
       const x = m[0]! * 0.5 + m[3]! * 0.5 + m[6]! * 1;

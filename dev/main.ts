@@ -38,7 +38,9 @@ window.addEventListener("mousemove", (e) => {
   lastX = e.clientX;
   lastY = e.clientY;
 
-  tessera.camera.pan(dx, dy, canvas.width, canvas.height);
+  // Scale mouse delta by DPR to match device pixel coordinate system
+  const dpr = window.devicePixelRatio || 1;
+  tessera.camera.pan(dx * dpr, dy * dpr, canvas.width, canvas.height);
   tessera.requestRender();
 });
 
@@ -46,10 +48,11 @@ window.addEventListener("mousemove", (e) => {
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
 
+  const dpr = window.devicePixelRatio || 1;
   const delta = -e.deltaY * 0.002;
   const rect = canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left) * window.devicePixelRatio;
-  const y = (e.clientY - rect.top) * window.devicePixelRatio;
+  const x = (e.clientX - rect.left) * dpr;
+  const y = (e.clientY - rect.top) * dpr;
 
   tessera.camera.zoomAt(delta, x, y, canvas.width, canvas.height);
   tessera.requestRender();
@@ -82,13 +85,15 @@ canvas.addEventListener("touchmove", (e) => {
   const touch0 = e.touches[0];
   const touch1 = e.touches[1];
 
+  const dpr = window.devicePixelRatio || 1;
+
   if (e.touches.length === 1 && touch0) {
     const dx = touch0.clientX - lastTouchX;
     const dy = touch0.clientY - lastTouchY;
     lastTouchX = touch0.clientX;
     lastTouchY = touch0.clientY;
 
-    tessera.camera.pan(dx, dy, canvas.width, canvas.height);
+    tessera.camera.pan(dx * dpr, dy * dpr, canvas.width, canvas.height);
     tessera.requestRender();
   } else if (e.touches.length === 2 && touch0 && touch1) {
     const dx = touch1.clientX - touch0.clientX;
@@ -102,15 +107,15 @@ canvas.addEventListener("touchmove", (e) => {
     if (lastTouchDistance > 0) {
       const delta = (distance - lastTouchDistance) * 0.01;
       const rect = canvas.getBoundingClientRect();
-      const x = (centerX - rect.left) * window.devicePixelRatio;
-      const y = (centerY - rect.top) * window.devicePixelRatio;
+      const x = (centerX - rect.left) * dpr;
+      const y = (centerY - rect.top) * dpr;
       tessera.camera.zoomAt(delta, x, y, canvas.width, canvas.height);
     }
 
     // Pan
     const panDx = centerX - lastTouchX;
     const panDy = centerY - lastTouchY;
-    tessera.camera.pan(panDx, panDy, canvas.width, canvas.height);
+    tessera.camera.pan(panDx * dpr, panDy * dpr, canvas.width, canvas.height);
 
     lastTouchDistance = distance;
     lastTouchX = centerX;
