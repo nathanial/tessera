@@ -1,0 +1,44 @@
+{
+  "name": "tessera",
+  "version": "0.0.1",
+  "description": "A zero-dependency, hardware-accelerated 2D vector rendering engine for the web",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "vite dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6"
+  },
+  "keywords": [
+    "webgl",
+    "2d",
+    "rendering",
+    "vector",
+    "graphics",
+    "maps",
+    "visualization"
+  ],
+  "license": "MIT"
+}
