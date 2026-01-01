@@ -38,16 +38,19 @@ function convertCoords(coords: number[][]): number[][] {
 // POLYGONS - Various neighborhoods and areas
 // ============================================
 
-// Financial District (z-index: 1, blue)
+// Small polygon size ~0.005 degrees ≈ 500m
+const S = 0.005;
+
+// Financial District - Downtown SF (blue)
 featureRenderer.addFeature({
   type: "Polygon" as const,
   coordinates: [
     convertCoords([
-      [-122.405, 37.795],
-      [-122.395, 37.795],
-      [-122.395, 37.785],
-      [-122.405, 37.785],
-      [-122.405, 37.795],
+      [-122.400, 37.792],
+      [-122.400 + S, 37.792],
+      [-122.400 + S, 37.792 - S],
+      [-122.400, 37.792 - S],
+      [-122.400, 37.792],
     ]),
   ],
 }, {
@@ -57,35 +60,35 @@ featureRenderer.addFeature({
   zIndex: 1,
 });
 
-// SOMA district (z-index: 0, purple, behind Financial)
+// Oakland Downtown (purple) - East Bay
 featureRenderer.addFeature({
   type: "Polygon" as const,
   coordinates: [
     convertCoords([
-      [-122.415, 37.785],
-      [-122.390, 37.785],
-      [-122.390, 37.770],
-      [-122.415, 37.770],
-      [-122.415, 37.785],
+      [-122.275, 37.805],
+      [-122.275 + S, 37.805],
+      [-122.275 + S, 37.805 - S],
+      [-122.275, 37.805 - S],
+      [-122.275, 37.805],
     ]),
   ],
 }, {
-  fillColor: [0.6, 0.2, 0.8, 0.4],
+  fillColor: [0.6, 0.2, 0.8, 0.5],
   strokeColor: [0.4, 0.1, 0.5, 1.0],
   strokeWidth: 2,
-  zIndex: 0,
+  zIndex: 1,
 });
 
-// Mission District (z-index: 2, orange, on top)
+// Berkeley (orange) - North East Bay
 featureRenderer.addFeature({
   type: "Polygon" as const,
   coordinates: [
     convertCoords([
-      [-122.425, 37.765],
-      [-122.405, 37.765],
-      [-122.405, 37.750],
-      [-122.425, 37.750],
-      [-122.425, 37.765],
+      [-122.272, 37.872],
+      [-122.272 + S, 37.872],
+      [-122.272 + S, 37.872 - S],
+      [-122.272, 37.872 - S],
+      [-122.272, 37.872],
     ]),
   ],
 }, {
@@ -95,24 +98,26 @@ featureRenderer.addFeature({
   zIndex: 2,
 });
 
-// Golden Gate Park (green with hole)
+// Golden Gate Park (green with lake hole) - West SF
+const parkW = 0.015;
+const parkH = 0.004;
 featureRenderer.addFeature({
   type: "Polygon" as const,
   coordinates: [
     convertCoords([
-      [-122.51, 37.775],
-      [-122.45, 37.775],
-      [-122.45, 37.765],
-      [-122.51, 37.765],
-      [-122.51, 37.775],
+      [-122.480, 37.770],
+      [-122.480 + parkW, 37.770],
+      [-122.480 + parkW, 37.770 - parkH],
+      [-122.480, 37.770 - parkH],
+      [-122.480, 37.770],
     ]),
     // Inner hole (lake)
     convertCoords([
-      [-122.49, 37.772],
-      [-122.47, 37.772],
-      [-122.47, 37.768],
-      [-122.49, 37.768],
-      [-122.49, 37.772],
+      [-122.475, 37.769],
+      [-122.470, 37.769],
+      [-122.470, 37.767],
+      [-122.475, 37.767],
+      [-122.475, 37.769],
     ]),
   ],
 }, {
@@ -122,16 +127,16 @@ featureRenderer.addFeature({
   zIndex: 1,
 });
 
-// Marina District (teal)
+// Sausalito (teal) - North of Golden Gate
 featureRenderer.addFeature({
   type: "Polygon" as const,
   coordinates: [
     convertCoords([
-      [-122.445, 37.805],
-      [-122.425, 37.805],
-      [-122.425, 37.795],
-      [-122.445, 37.795],
-      [-122.445, 37.805],
+      [-122.482, 37.858],
+      [-122.482 + S, 37.858],
+      [-122.482 + S, 37.858 - S],
+      [-122.482, 37.858 - S],
+      [-122.482, 37.858],
     ]),
   ],
 }, {
@@ -141,16 +146,16 @@ featureRenderer.addFeature({
   zIndex: 1,
 });
 
-// Presidio (dark green)
+// Daly City (dark green) - South of SF
 featureRenderer.addFeature({
   type: "Polygon" as const,
   coordinates: [
     convertCoords([
-      [-122.475, 37.805],
-      [-122.450, 37.805],
-      [-122.450, 37.785],
-      [-122.475, 37.785],
-      [-122.475, 37.805],
+      [-122.465, 37.690],
+      [-122.465 + S, 37.690],
+      [-122.465 + S, 37.690 - S],
+      [-122.465, 37.690 - S],
+      [-122.465, 37.690],
     ]),
   ],
 }, {
@@ -159,6 +164,79 @@ featureRenderer.addFeature({
   strokeWidth: 2,
   zIndex: 0,
 });
+
+// Alameda (red) - East Bay island
+featureRenderer.addFeature({
+  type: "Polygon" as const,
+  coordinates: [
+    convertCoords([
+      [-122.265, 37.768],
+      [-122.265 + S * 1.5, 37.768],
+      [-122.265 + S * 1.5, 37.768 - S * 0.7],
+      [-122.265, 37.768 - S * 0.7],
+      [-122.265, 37.768],
+    ]),
+  ],
+}, {
+  fillColor: [0.9, 0.2, 0.2, 0.5],
+  strokeColor: [0.7, 0.1, 0.1, 1.0],
+  strokeWidth: 2,
+  zIndex: 1,
+});
+
+// Treasure Island (gold) - In the bay
+featureRenderer.addFeature({
+  type: "Polygon" as const,
+  coordinates: [
+    convertCoords([
+      [-122.373, 37.822],
+      [-122.373 + S * 0.8, 37.822],
+      [-122.373 + S * 0.8, 37.822 - S * 0.6],
+      [-122.373, 37.822 - S * 0.6],
+      [-122.373, 37.822],
+    ]),
+  ],
+}, {
+  fillColor: [0.9, 0.75, 0.1, 0.5],
+  strokeColor: [0.7, 0.55, 0.0, 1.0],
+  strokeWidth: 2,
+  zIndex: 2,
+});
+
+// STRESS TEST: Generate 200 random polygons across Bay Area
+for (let i = 0; i < 200; i++) {
+  const centerLng = -122.55 + Math.random() * 0.35;
+  const centerLat = 37.68 + Math.random() * 0.25;
+  const size = 0.002 + Math.random() * 0.004;
+  const sides = 3 + Math.floor(Math.random() * 6);
+  const rotation = Math.random() * Math.PI * 2;
+
+  // Generate polygon vertices
+  const coords: number[][] = [];
+  for (let j = 0; j <= sides; j++) {
+    const angle = rotation + (j / sides) * Math.PI * 2;
+    coords.push([
+      centerLng + Math.cos(angle) * size,
+      centerLat + Math.sin(angle) * size * 0.8,
+    ]);
+  }
+
+  // Random color
+  const hue = Math.random();
+  const r = Math.abs(Math.sin(hue * Math.PI * 2)) * 0.7 + 0.3;
+  const g = Math.abs(Math.sin((hue + 0.33) * Math.PI * 2)) * 0.7 + 0.3;
+  const b = Math.abs(Math.sin((hue + 0.66) * Math.PI * 2)) * 0.7 + 0.3;
+
+  featureRenderer.addFeature({
+    type: "Polygon" as const,
+    coordinates: [convertCoords(coords)],
+  }, {
+    fillColor: [r, g, b, 0.3 + Math.random() * 0.3],
+    strokeColor: [r * 0.7, g * 0.7, b * 0.7, 0.8],
+    strokeWidth: 1 + Math.random() * 2,
+    zIndex: Math.floor(Math.random() * 5),
+  });
+}
 
 // ============================================
 // LINES - Transit routes and paths
@@ -278,6 +356,41 @@ featureRenderer.addFeature({
   zIndex: 2,
 });
 
+// STRESS TEST: Generate 300 random lines across Bay Area
+for (let i = 0; i < 300; i++) {
+  const startLng = -122.55 + Math.random() * 0.35;
+  const startLat = 37.68 + Math.random() * 0.25;
+  const segments = 2 + Math.floor(Math.random() * 6);
+
+  const coords: number[][] = [[startLng, startLat]];
+  let lng = startLng;
+  let lat = startLat;
+
+  for (let j = 0; j < segments; j++) {
+    lng += (Math.random() - 0.5) * 0.02;
+    lat += (Math.random() - 0.5) * 0.015;
+    coords.push([lng, lat]);
+  }
+
+  // Random color
+  const hue = Math.random();
+  const r = Math.abs(Math.sin(hue * Math.PI * 2)) * 0.8 + 0.2;
+  const g = Math.abs(Math.sin((hue + 0.33) * Math.PI * 2)) * 0.8 + 0.2;
+  const b = Math.abs(Math.sin((hue + 0.66) * Math.PI * 2)) * 0.8 + 0.2;
+
+  const caps: Array<"butt" | "round" | "square"> = ["butt", "round", "square"];
+
+  featureRenderer.addFeature({
+    type: "LineString" as const,
+    coordinates: convertCoords(coords),
+  }, {
+    strokeColor: [r, g, b, 0.6 + Math.random() * 0.4],
+    strokeWidth: 1 + Math.random() * 4,
+    strokeCap: caps[Math.floor(Math.random() * 3)],
+    zIndex: Math.floor(Math.random() * 5),
+  });
+}
+
 console.log(`Added ${featureRenderer.featureCount} GeoJSON features`);
 
 // ============================================
@@ -286,11 +399,9 @@ console.log(`Added ${featureRenderer.featureCount} GeoJSON features`);
 
 const sdfRenderer = new SDFRenderer(tessera.gl);
 
-// Generate font atlas at runtime
+// Generate font atlas at runtime (uses 64px base size, 1024px atlas)
 const fontAtlas = createFontAtlas({
   fontFamily: "Arial, Helvetica, sans-serif",
-  fontSize: 48,
-  atlasSize: 512,
 });
 
 // Wait for font atlas to load, then add text labels
@@ -298,21 +409,45 @@ let textReady = false;
 fontAtlas.ready.then(() => {
   sdfRenderer.loadFontAtlas(fontAtlas.metadata, fontAtlas.image);
 
-  // Neighborhood labels
+  // Area labels matching the spread-out polygons
   const labels: Array<{ text: string; lng: number; lat: number; size: number; color: [number, number, number, number] }> = [
-    { text: "Financial District", lng: -122.400, lat: 37.790, size: 14, color: [0.1, 0.2, 0.5, 1] },
-    { text: "SOMA", lng: -122.402, lat: 37.777, size: 14, color: [0.4, 0.1, 0.5, 1] },
-    { text: "Mission", lng: -122.415, lat: 37.757, size: 14, color: [0.6, 0.3, 0.0, 1] },
-    { text: "Golden Gate Park", lng: -122.480, lat: 37.770, size: 12, color: [0.1, 0.4, 0.1, 1] },
-    { text: "Marina", lng: -122.435, lat: 37.800, size: 12, color: [0.0, 0.4, 0.4, 1] },
-    { text: "Presidio", lng: -122.462, lat: 37.795, size: 12, color: [0.05, 0.25, 0.1, 1] },
-    // Transit labels
-    { text: "BART", lng: -122.365, lat: 37.778, size: 11, color: [0.0, 0.2, 0.6, 1] },
-    { text: "Muni", lng: -122.385, lat: 37.792, size: 11, color: [0.7, 0.1, 0.1, 1] },
-    { text: "Cable Car", lng: -122.398, lat: 37.773, size: 10, color: [0.8, 0.5, 0.0, 1] },
-    // City label
-    { text: "San Francisco", lng: -122.420, lat: 37.805, size: 18, color: [0.2, 0.2, 0.2, 1] },
+    // SF areas
+    { text: "Financial District", lng: -122.400, lat: 37.790, size: 24, color: [0.1, 0.2, 0.5, 1] },
+    { text: "Golden Gate Park", lng: -122.480, lat: 37.770, size: 22, color: [0.1, 0.4, 0.1, 1] },
+    // East Bay
+    { text: "Oakland", lng: -122.270, lat: 37.802, size: 28, color: [0.4, 0.1, 0.5, 1] },
+    { text: "Berkeley", lng: -122.270, lat: 37.870, size: 28, color: [0.6, 0.3, 0.0, 1] },
+    { text: "Alameda", lng: -122.260, lat: 37.767, size: 24, color: [0.7, 0.1, 0.1, 1] },
+    // North Bay
+    { text: "Sausalito", lng: -122.482, lat: 37.855, size: 24, color: [0.0, 0.4, 0.4, 1] },
+    // South Bay
+    { text: "Daly City", lng: -122.460, lat: 37.682, size: 24, color: [0.05, 0.25, 0.1, 1] },
+    // Islands
+    { text: "Treasure Island", lng: -122.367, lat: 37.820, size: 20, color: [0.6, 0.45, 0.0, 1] },
+    // Main title
+    { text: "San Francisco Bay Area", lng: -122.38, lat: 37.82, size: 36, color: [0.2, 0.2, 0.2, 1] },
   ];
+
+  // STRESS TEST: Generate 200 random text labels
+  const words = ["Point", "Area", "Zone", "District", "Park", "Place", "Center", "Square", "Plaza", "Station", "Terminal", "Market", "Harbor", "Beach", "Hill", "Valley", "Creek", "Lake", "Bay", "Cove"];
+  const prefixes = ["North", "South", "East", "West", "Upper", "Lower", "Old", "New", "Grand", "Little", "Big", "Green", "Blue", "Red", "Golden", "Silver", "Crystal", "Sunny", "Happy", "Lucky"];
+
+  for (let i = 0; i < 200; i++) {
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const word = words[Math.floor(Math.random() * words.length)];
+    const text = `${prefix} ${word}`;
+
+    const lng = -122.55 + Math.random() * 0.35;
+    const lat = 37.68 + Math.random() * 0.25;
+    const size = 16 + Math.random() * 18;
+
+    const hue = Math.random();
+    const r = Math.abs(Math.sin(hue * Math.PI * 2)) * 0.5 + 0.2;
+    const g = Math.abs(Math.sin((hue + 0.33) * Math.PI * 2)) * 0.5 + 0.2;
+    const b = Math.abs(Math.sin((hue + 0.66) * Math.PI * 2)) * 0.5 + 0.2;
+
+    labels.push({ text, lng, lat, size, color: [r, g, b, 1] });
+  }
 
   for (const label of labels) {
     const [x, y] = lngLatToWorld(label.lng, label.lat);
@@ -339,7 +474,8 @@ const squareRenderer = new InstancedPointRenderer(tessera.gl);
 const triangleRenderer = new InstancedPointRenderer(tessera.gl);
 const diamondRenderer = new InstancedPointRenderer(tessera.gl);
 
-const sfCenter = lngLatToWorld(-122.41, 37.78);
+// Bay Area center for animations
+const bayAreaCenter = lngLatToWorld(-122.38, 37.82);
 
 // ============================================
 // ANIMATED POINT DATA
@@ -396,15 +532,15 @@ function generateAnimatedPoints(
       ],
       size,
       rotation: Math.random() * Math.PI * 2,
-      // Velocity for wandering
-      vx: (Math.random() - 0.5) * 0.00002,
-      vy: (Math.random() - 0.5) * 0.00002,
+      // Velocity for wandering - slower drift
+      vx: (Math.random() - 0.5) * 0.000005,
+      vy: (Math.random() - 0.5) * 0.000005,
       rotationSpeed: (Math.random() - 0.5) * 0.1,
-      // Orbit parameters
+      // Orbit parameters - varied orbits, slow rotation
       orbitCenterX: center[0],
       orbitCenterY: center[1],
-      orbitRadius: 0.002 + Math.random() * 0.006,
-      orbitSpeed: 0.5 + Math.random() * 1.5,
+      orbitRadius: 0.00005 + Math.random() * 0.0006,
+      orbitSpeed: 0.05 + Math.random() * 0.25,
       orbitPhase: Math.random() * Math.PI * 2,
       animationType,
       // Pulse parameters
@@ -416,11 +552,11 @@ function generateAnimatedPoints(
   return points;
 }
 
-// Create animated point arrays
-let circlePoints = generateAnimatedPoints(-122.405, 37.79, 150, 0.008, [0.3, 0.5, 0.9], [5, 12], "orbit");
-let squarePoints = generateAnimatedPoints(-122.405, 37.775, 100, 0.006, [0.9, 0.3, 0.3], [6, 10], "wander");
-let trianglePoints = generateAnimatedPoints(-122.40, 37.80, 80, 0.01, [0.2, 0.8, 0.7], [8, 14], "pulse");
-let diamondPoints = generateAnimatedPoints(-122.415, 37.758, 60, 0.005, [0.95, 0.7, 0.2], [7, 12], "orbit");
+// STRESS TEST: Massive number of instanced points
+let circlePoints = generateAnimatedPoints(-122.40, 37.79, 5000, 0.004, [0.3, 0.5, 0.9], [4, 12], "orbit");     // SF
+let squarePoints = generateAnimatedPoints(-122.27, 37.80, 5000, 0.004, [0.9, 0.3, 0.3], [4, 10], "orbit");     // Oakland
+let trianglePoints = generateAnimatedPoints(-122.27, 37.87, 5000, 0.004, [0.2, 0.8, 0.7], [5, 12], "pulse");   // Berkeley
+let diamondPoints = generateAnimatedPoints(-122.48, 37.85, 5000, 0.004, [0.95, 0.7, 0.2], [5, 11], "orbit");   // Marin
 
 // Initial render
 circleRenderer.setInstances("circle", circlePoints);
@@ -456,7 +592,7 @@ interface AnimatedPolygon {
 }
 
 const animatedPolygons: AnimatedPolygon[] = [];
-const MAX_ANIMATED_POLYGONS = 8;
+const MAX_ANIMATED_POLYGONS = 100;  // STRESS TEST: 100 animated polygons
 
 function createAnimatedPolygon(): AnimatedPolygon {
   const hue = Math.random();
@@ -472,9 +608,10 @@ function createAnimatedPolygon(): AnimatedPolygon {
   else if (h < 5) { r = x; b = c; }
   else { r = c; b = x; }
 
+  // Spawn in tighter Bay Area region
   return {
-    centerLng: -122.45 + Math.random() * 0.1,
-    centerLat: 37.75 + Math.random() * 0.06,
+    centerLng: -122.45 + Math.random() * 0.12,  // -122.45 to -122.33
+    centerLat: 37.76 + Math.random() * 0.10,    // 37.76 to 37.86
     radius: 0.003 + Math.random() * 0.005,
     sides: 3 + Math.floor(Math.random() * 6), // 3-8 sides
     rotation: 0,
@@ -501,8 +638,9 @@ function generatePolygonCoords(poly: AnimatedPolygon): number[][] {
   const coords: number[][] = [];
   for (let i = 0; i <= poly.sides; i++) {
     const angle = poly.rotation + (i / poly.sides) * Math.PI * 2;
-    const lng = poly.centerLng + Math.cos(angle) * poly.radius * 100; // Scale for lng
-    const lat = poly.centerLat + Math.sin(angle) * poly.radius * 80;  // Scale for lat
+    // radius is in degrees, no extra scaling needed
+    const lng = poly.centerLng + Math.cos(angle) * poly.radius;
+    const lat = poly.centerLat + Math.sin(angle) * poly.radius;
     coords.push([lng, lat]);
   }
   return coords;
@@ -518,11 +656,12 @@ console.log(`Added ${MAX_ANIMATED_POLYGONS} animated polygons`);
 // ============================================
 
 let animationTime = 0;
+// Tighter bounds for Bay Area animations
 const BOUNDS = {
-  minX: sfCenter[0] - 0.015,
-  maxX: sfCenter[0] + 0.015,
-  minY: sfCenter[1] - 0.012,
-  maxY: sfCenter[1] + 0.012,
+  minX: bayAreaCenter[0] - 0.008,
+  maxX: bayAreaCenter[0] + 0.008,
+  minY: bayAreaCenter[1] - 0.006,
+  maxY: bayAreaCenter[1] + 0.006,
 };
 
 function updateAnimations(dt: number) {
@@ -622,9 +761,11 @@ function updateAnimations(dt: number) {
   }
 }
 
-// Start centered on San Francisco area
-tessera.camera.centerX = 0.17;
-tessera.camera.centerY = 0.395;
+// Start centered on San Francisco
+// SF coords: -122.42, 37.78 -> world space ~(0.16, 0.386)
+const sfWorld = lngLatToWorld(-122.42, 37.78);
+tessera.camera.centerX = sfWorld[0];
+tessera.camera.centerY = sfWorld[1];
 tessera.camera.zoom = 12;
 
 // Animation timing

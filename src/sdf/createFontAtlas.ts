@@ -15,9 +15,9 @@ const DEFAULT_CHARSET =
 export interface FontAtlasOptions {
   /** Font family (default: "Arial") */
   fontFamily?: string;
-  /** Base font size in pixels (default: 48) */
+  /** Base font size in pixels (default: 64 for quality) */
   fontSize?: number;
-  /** Atlas texture size (default: 512) */
+  /** Atlas texture size (default: 1024) */
   atlasSize?: number;
   /** Characters to include (default: ASCII printable) */
   charset?: string;
@@ -45,8 +45,8 @@ export function createFontAtlas(
 ): GeneratedFontAtlas {
   const {
     fontFamily = "Arial, sans-serif",
-    fontSize = 48,
-    atlasSize = 512,
+    fontSize = 64,
+    atlasSize = 1024,
     charset = DEFAULT_CHARSET,
     padding = 4,
   } = options;
@@ -55,13 +55,17 @@ export function createFontAtlas(
   const canvas = document.createElement("canvas");
   canvas.width = atlasSize;
   canvas.height = atlasSize;
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d", { willReadFrequently: false })!;
+
+  // Enable high-quality text rendering
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
 
   // Clear with transparent black
   ctx.fillStyle = "rgba(0, 0, 0, 0)";
   ctx.fillRect(0, 0, atlasSize, atlasSize);
 
-  // Set up font
+  // Set up font with good rendering hints
   ctx.font = `${fontSize}px ${fontFamily}`;
   ctx.textBaseline = "top";
   ctx.fillStyle = "white";
@@ -114,12 +118,14 @@ export function createFontAtlas(
   }
 
   // Create metadata
+  // Use sdfSpread of 2 so gamma = 1.4142/2 = 0.707 >= 0.4
+  // This triggers the canvas font path in the shader
   const metadata: FontAtlasMetadata = {
     name: fontFamily,
     size: fontSize,
     atlasWidth: atlasSize,
     atlasHeight: atlasSize,
-    sdfSpread: 4, // Fake SDF spread for shader compatibility
+    sdfSpread: 2, // Low spread triggers canvas font path in shader (gamma >= 0.4)
     lineHeight: fontSize * 1.2,
     baseline: fontSize * 0.8,
     glyphs,
