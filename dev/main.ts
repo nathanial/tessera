@@ -4,6 +4,89 @@ import { ADSBLayer, getAltitudeColor } from "./adsb";
 
 console.log(`Tessera v${VERSION}`);
 
+// ============================================
+// LABEL CLUSTERING (Spatial Binning)
+// ============================================
+
+const LABEL_CELL_SIZE = 120; // Grid cell size in pixels for clustering
+
+interface ClusterableItem {
+  x: number;
+  y: number;
+  callsign: string | null;
+  icao24: string;
+}
+
+interface LabelCluster {
+  aircraft: ClusterableItem[];
+  screenX: number;
+  screenY: number;
+}
+
+/** Convert world coordinates to screen pixels */
+function worldToScreen(
+  worldX: number,
+  worldY: number,
+  matrix: Float32Array,
+  viewportWidth: number,
+  viewportHeight: number
+): { screenX: number; screenY: number } {
+  // Apply 3x3 matrix: clipX = matrix[0]*x + matrix[3]*y + matrix[6]
+  const clipX = matrix[0] * worldX + matrix[3] * worldY + matrix[6];
+  const clipY = matrix[1] * worldX + matrix[4] * worldY + matrix[7];
+
+  // Clip space (-1,1) to screen pixels
+  const screenX = (clipX + 1) * 0.5 * viewportWidth;
+  const screenY = (1 - clipY) * 0.5 * viewportHeight; // Y flipped
+
+  return { screenX, screenY };
+}
+
+/** Group aircraft into spatial bins for label clustering */
+function clusterLabels(
+  aircraft: ClusterableItem[],
+  matrix: Float32Array,
+  viewportWidth: number,
+  viewportHeight: number,
+  fixedGridOffset?: { x: number; y: number }
+): { clusters: LabelCluster[]; gridOffset: { x: number; y: number } } {
+  const grid = new Map<string, LabelCluster>();
+
+  // Calculate current grid offset from world origin
+  const origin = worldToScreen(0, 0, matrix, viewportWidth, viewportHeight);
+  const currentOffset = {
+    x: ((origin.screenX % LABEL_CELL_SIZE) + LABEL_CELL_SIZE) % LABEL_CELL_SIZE,
+    y: ((origin.screenY % LABEL_CELL_SIZE) + LABEL_CELL_SIZE) % LABEL_CELL_SIZE,
+  };
+
+  // Use fixed offset if provided (for stable clustering during zoom)
+  const gridOffsetX = fixedGridOffset?.x ?? currentOffset.x;
+  const gridOffsetY = fixedGridOffset?.y ?? currentOffset.y;
+
+  for (const ac of aircraft) {
+    const { screenX, screenY } = worldToScreen(ac.x, ac.y, matrix, viewportWidth, viewportHeight);
+
+    // Skip if off-screen (always use current visibility)
+    if (screenX < 0 || screenX > viewportWidth || screenY < 0 || screenY > viewportHeight) {
+      continue;
+    }
+
+    // Use grid offset for cell assignment (may be cached for stable grouping)
+    const cellX = Math.floor((screenX - gridOffsetX) / LABEL_CELL_SIZE);
+    const cellY = Math.floor((screenY - gridOffsetY) / LABEL_CELL_SIZE);
+    const key = `${cellX}_${cellY}`;
+
+    let cluster = grid.get(key);
+    if (!cluster) {
+      cluster = { aircraft: [], screenX, screenY };
+      grid.set(key, cluster);
+    }
+    cluster.aircraft.push(ac);
+  }
+
+  return { clusters: Array.from(grid.values()), gridOffset: currentOffset };
+}
+
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const tessera = new Tessera({ canvas });
 
@@ -225,6 +308,9 @@ tessera.camera.zoom = 8; // Zoomed in to see grid shapes
 let lastTime = performance.now();
 
 const originalRender = tessera.render.bind(tessera);
+// Cached grid offset for stable clustering during zoom animation
+let cachedGridOffset: { x: number; y: number } | null = null;
+
 tessera.render = function () {
   // Calculate delta time
   const now = performance.now();
@@ -233,7 +319,7 @@ tessera.render = function () {
 
   // Update inertial zoom animation
   if (this.camera.updateZoom(dt)) {
-    this.requestRender(); // Keep animating while zoom has velocity
+    this.requestRender();
   }
 
   // Update rotations, hue offset, and animation time
@@ -342,23 +428,49 @@ tessera.render = function () {
   draw.end();
 
   // ============================================
-  // DRAW AIRCRAFT LABELS
+  // DRAW AIRCRAFT LABELS (with spatial clustering)
   // ============================================
   sdfRenderer.clearText();
 
   // Compute label offset in world units (offset to the right of aircraft)
   const labelOffsetWorld = aircraftSize * 1.2;
 
-  for (const ac of adsbLayer.aircraft) {
-    // Frustum culling (same as aircraft)
-    if (ac.x + aircraftSize < bounds.left || ac.x - aircraftSize > bounds.right ||
-        ac.y + aircraftSize < bounds.top || ac.y - aircraftSize > bounds.bottom) {
-      continue;
+  // During zoom animation, use cached grid offset for stable grouping
+  // Labels still move (recalculated each frame) but groupings stay consistent
+  const isZooming = this.camera.isZoomAnimating();
+  const { clusters, gridOffset } = clusterLabels(
+    adsbLayer.aircraft,
+    matrix,
+    w,
+    h,
+    isZooming ? cachedGridOffset ?? undefined : undefined
+  );
+
+  // Cache grid offset when not zooming (for next zoom animation)
+  if (!isZooming) {
+    cachedGridOffset = gridOffset;
+  }
+
+  for (const cluster of clusters) {
+    const representative = cluster.aircraft[0]!;
+    const count = cluster.aircraft.length;
+
+    // Format label: single aircraft shows full label, clusters show "+N"
+    let label: string;
+    if (count === 1) {
+      label = representative.callsign || representative.icao24;
+    } else {
+      const name = representative.callsign || representative.icao24;
+      label = `${name} +${count - 1}`;
     }
 
-    // Use callsign if available, otherwise ICAO24 code
-    const label = ac.callsign || ac.icao24;
-    sdfRenderer.addText(label, ac.x + labelOffsetWorld, ac.y, labelStyle);
+    // Position label next to representative aircraft
+    sdfRenderer.addText(
+      label,
+      representative.x + labelOffsetWorld,
+      representative.y,
+      labelStyle
+    );
   }
 
   sdfRenderer.render(matrix, w, h);
@@ -412,7 +524,6 @@ canvas.addEventListener("wheel", (e) => {
   const x = (e.clientX - rect.left) * dpr;
   const y = (e.clientY - rect.top) * dpr;
 
-  // Use inertial zoom - adds velocity instead of instant zoom
   tessera.camera.addZoomVelocity(delta, x, y, canvas.width, canvas.height);
   tessera.requestRender();
 });

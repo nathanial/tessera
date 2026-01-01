@@ -16,8 +16,8 @@ export class Camera {
   static readonly TILE_SIZE = 512;
 
   // Inertial zoom animation state
-  private static readonly ZOOM_DECAY = 0.00001; // Exponential decay rate (lower = faster stop)
-  private static readonly ZOOM_VELOCITY_THRESHOLD = 0.0001; // Stop threshold
+  private static readonly ZOOM_DECAY = 0.00001;
+  private static readonly ZOOM_VELOCITY_THRESHOLD = 0.0001;
 
   private zoomVelocity = 0;
   private zoomAnchorX = 0;
@@ -129,10 +129,7 @@ export class Camera {
     viewportWidth: number,
     viewportHeight: number
   ): void {
-    // Accumulate velocity
     this.zoomVelocity += delta;
-
-    // Update anchor point (where to zoom toward)
     this.zoomAnchorX = screenX;
     this.zoomAnchorY = screenY;
     this.lastViewportWidth = viewportWidth;
@@ -146,11 +143,9 @@ export class Camera {
   updateZoom(dt: number): boolean {
     if (Math.abs(this.zoomVelocity) < Camera.ZOOM_VELOCITY_THRESHOLD) {
       this.zoomVelocity = 0;
-      return false; // Animation complete
+      return false;
     }
 
-    // Apply zoom with cursor anchoring
-    // Scale by 60 to normalize for ~60fps (velocity feels consistent across frame rates)
     this.zoomAt(
       this.zoomVelocity * dt * 60,
       this.zoomAnchorX,
@@ -159,15 +154,8 @@ export class Camera {
       this.lastViewportHeight
     );
 
-    // Decay velocity (exponential decay)
     this.zoomVelocity *= Math.pow(Camera.ZOOM_DECAY, dt);
-
-    return true; // Still animating
-  }
-
-  /** Stop any ongoing zoom animation */
-  stopZoomAnimation(): void {
-    this.zoomVelocity = 0;
+    return true;
   }
 
   /** Check if zoom animation is active */
