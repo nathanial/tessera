@@ -42,8 +42,9 @@ export interface StackedCallout {
   boxY: number;
   boxWidth: number;
   boxHeight: number;
-  targetX: number;      // Screen position of cluster centroid (for leader line)
+  targetX: number;      // Screen position for leader line endpoint
   targetY: number;
+  hullPoints: Array<{ screenX: number; screenY: number }>;  // Convex hull around aircraft
 }
 
 export interface PlacementResult {
@@ -61,7 +62,61 @@ export interface PlacementOptions {
   maxCalloutLabels: number;   // Max labels shown in callout before "+N more"
   leaderLineMargin: number;   // Min distance to displace label
   hysteresisMargin: number;   // Pixels - must move this far past boundary to switch clusters
-  worldCellSize: number;      // World-space cell size for clustering (stable across pan)
+}
+
+// ============================================
+// CONVEX HULL (Graham Scan)
+// ============================================
+
+interface Point2D {
+  x: number;
+  y: number;
+}
+
+/** Cross product of vectors OA and OB */
+function cross(o: Point2D, a: Point2D, b: Point2D): number {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+/**
+ * Compute convex hull of a set of points using Graham scan.
+ * Returns vertices in counter-clockwise order.
+ */
+function convexHull(points: Point2D[]): Point2D[] {
+  if (points.length <= 2) return [...points];
+
+  // Find the point with lowest y (and leftmost if tie)
+  let start = points[0]!;
+  for (const p of points) {
+    if (p.y < start.y || (p.y === start.y && p.x < start.x)) {
+      start = p;
+    }
+  }
+
+  // Sort by polar angle from start point
+  const sorted = points
+    .filter(p => p !== start)
+    .sort((a, b) => {
+      const angleA = Math.atan2(a.y - start.y, a.x - start.x);
+      const angleB = Math.atan2(b.y - start.y, b.x - start.x);
+      if (angleA !== angleB) return angleA - angleB;
+      // If same angle, sort by distance (closer first)
+      const distA = Math.hypot(a.x - start.x, a.y - start.y);
+      const distB = Math.hypot(b.x - start.x, b.y - start.y);
+      return distA - distB;
+    });
+
+  // Build hull using stack
+  const hull: Point2D[] = [start];
+  for (const p of sorted) {
+    // Remove points that make clockwise turn
+    while (hull.length > 1 && cross(hull[hull.length - 2]!, hull[hull.length - 1]!, p) <= 0) {
+      hull.pop();
+    }
+    hull.push(p);
+  }
+
+  return hull;
 }
 
 // ============================================
@@ -169,7 +224,6 @@ const DEFAULT_OPTIONS: PlacementOptions = {
   maxCalloutLabels: 5,
   leaderLineMargin: 30,
   hysteresisMargin: 20,
-  worldCellSize: 0.02,  // World units - stable clustering across pan
 };
 
 /** Function to measure text width */
@@ -409,18 +463,40 @@ export class LabelPlacer {
       return { leaderLabels: [], callouts: [], newClusterAssignments: new Map() };
     }
 
-    // Cluster labels using WORLD-SPACE coordinates (stable across pan/zoom)
+    // Cluster labels using SCREEN-SPACE coordinates (zoom-dependent clustering)
     const clusterGrid = new Map<string, PlacedLabel[]>();
-    const worldCellSize = this.options.worldCellSize;
+    const clusterCellSize = this.options.fontSize * 12; // Screen pixels
     const newClusterAssignments = new Map<string, string>();
 
     for (const label of displaced) {
-      // Use WORLD coordinates for clustering - this is stable during panning
-      const cx = Math.floor(label.item.anchorX / worldCellSize);
-      const cy = Math.floor(label.item.anchorY / worldCellSize);
-      const key = `${cx},${cy}`;
+      // Calculate current cell in screen space
+      const cx = Math.floor(label.anchorScreenX / clusterCellSize);
+      const cy = Math.floor(label.anchorScreenY / clusterCellSize);
+      const currentKey = `${cx},${cy}`;
 
-      // Store assignment (no hysteresis needed - world coords are stable)
+      // Check previous assignment for hysteresis (stability during panning)
+      const prevKey = this.prevClusterAssignments.get(label.item.id);
+      let key = currentKey;
+
+      if (prevKey && prevKey !== currentKey) {
+        // Label crossed a boundary - check if it's far enough to switch
+        const [prevCxStr, prevCyStr] = prevKey.split(',');
+        const prevCx = Number(prevCxStr);
+        const prevCy = Number(prevCyStr);
+        const prevCenterX = (prevCx + 0.5) * clusterCellSize;
+        const prevCenterY = (prevCy + 0.5) * clusterCellSize;
+
+        const distToPrevCenter = Math.hypot(
+          label.anchorScreenX - prevCenterX,
+          label.anchorScreenY - prevCenterY
+        );
+
+        // Only switch if moved past hysteresis margin from previous cell center
+        if (distToPrevCenter < clusterCellSize / 2 + this.options.hysteresisMargin) {
+          key = prevKey;  // Stay in previous cluster
+        }
+      }
+
       newClusterAssignments.set(label.item.id, key);
 
       let cluster = clusterGrid.get(key);
@@ -533,15 +609,46 @@ export class LabelPlacer {
   ): StackedCallout | null {
     const { padding, fontSize, lineHeight, maxCalloutLabels, hysteresisMargin } = this.options;
 
+    // Collect all aircraft screen positions
+    const aircraftPositions = cluster.map(label => ({
+      x: label.anchorScreenX,
+      y: label.anchorScreenY,
+    }));
+
     // Calculate cluster centroid
     let centroidX = 0;
     let centroidY = 0;
-    for (const label of cluster) {
-      centroidX += label.anchorScreenX;
-      centroidY += label.anchorScreenY;
+    for (const pos of aircraftPositions) {
+      centroidX += pos.x;
+      centroidY += pos.y;
     }
-    centroidX /= cluster.length;
-    centroidY /= cluster.length;
+    centroidX /= aircraftPositions.length;
+    centroidY /= aircraftPositions.length;
+
+    // Compute convex hull around all aircraft
+    const hull = convexHull(aircraftPositions);
+    const hullPoints = hull.map(p => ({ screenX: p.x, screenY: p.y }));
+
+    // Helper to find nearest hull point to box center
+    const findNearestHullPoint = (boxX: number, boxY: number, boxW: number, boxH: number) => {
+      const boxCenterX = boxX + boxW / 2;
+      const boxCenterY = boxY + boxH / 2;
+
+      if (hull.length === 0) {
+        return { x: centroidX, y: centroidY };
+      }
+
+      let nearest = hull[0]!;
+      let nearestDist = Infinity;
+      for (const p of hull) {
+        const dist = Math.hypot(p.x - boxCenterX, p.y - boxCenterY);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearest = p;
+        }
+      }
+      return nearest;
+    };
 
     // Determine labels to show
     const items = cluster.map(l => l.item);
@@ -579,14 +686,16 @@ export class LabelPlacer {
 
         if (!this.grid.hasOverlap(bounds)) {
           this.grid.insert(bounds);
+          const nearest = findNearestHullPoint(boxX, boxY, boxWidth, boxHeight);
           return {
             items: items.slice(0, displayCount),
             boxX,
             boxY,
             boxWidth,
             boxHeight,
-            targetX: centroidX,
-            targetY: centroidY,
+            targetX: nearest.x,
+            targetY: nearest.y,
+            hullPoints,
           };
         }
         // Cached position overlaps now, fall through to find new position
@@ -618,14 +727,16 @@ export class LabelPlacer {
 
       if (!this.grid.hasOverlap(bounds)) {
         this.grid.insert(bounds);
+        const nearest = findNearestHullPoint(boxX, boxY, boxWidth, boxHeight);
         return {
           items: items.slice(0, displayCount),
           boxX,
           boxY,
           boxWidth,
           boxHeight,
-          targetX: centroidX,
-          targetY: centroidY,
+          targetX: nearest.x,
+          targetY: nearest.y,
+          hullPoints,
         };
       }
     }
@@ -642,14 +753,16 @@ export class LabelPlacer {
     };
     this.grid.insert(bounds);
 
+    const nearest = findNearestHullPoint(fallbackX, fallbackY, boxWidth, boxHeight);
     return {
       items: items.slice(0, displayCount),
       boxX: fallbackX,
       boxY: fallbackY,
       boxWidth,
       boxHeight,
-      targetX: centroidX,
-      targetY: centroidY,
+      targetX: nearest.x,
+      targetY: nearest.y,
+      hullPoints,
     };
   }
 }

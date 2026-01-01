@@ -563,7 +563,44 @@ tessera.render = function () {
           boxBottomRight.worldY - boxTopLeft.worldY
         );
 
-        // Draw leader line from box to cluster centroid
+        // Draw convex hull around aircraft cluster
+        if (callout.hullPoints && callout.hullPoints.length >= 3) {
+          // Draw hull fill
+          draw.fillStyle = [0.3, 0.5, 1.0, 0.15]; // Subtle blue fill
+          draw.beginPath();
+          const firstHull = screenToWorld(callout.hullPoints[0]!.screenX, callout.hullPoints[0]!.screenY, matrix, w, h);
+          draw.moveTo(firstHull.worldX, firstHull.worldY);
+          for (let i = 1; i < callout.hullPoints.length; i++) {
+            const p = screenToWorld(callout.hullPoints[i]!.screenX, callout.hullPoints[i]!.screenY, matrix, w, h);
+            draw.lineTo(p.worldX, p.worldY);
+          }
+          draw.closePath();
+          draw.fill();
+
+          // Draw hull outline
+          draw.strokeStyle = [0.5, 0.7, 1.0, 0.5]; // Blue outline
+          draw.lineWidth = 1;
+          draw.beginPath();
+          draw.moveTo(firstHull.worldX, firstHull.worldY);
+          for (let i = 1; i < callout.hullPoints.length; i++) {
+            const p = screenToWorld(callout.hullPoints[i]!.screenX, callout.hullPoints[i]!.screenY, matrix, w, h);
+            draw.lineTo(p.worldX, p.worldY);
+          }
+          draw.closePath();
+          draw.stroke();
+        } else if (callout.hullPoints && callout.hullPoints.length === 2) {
+          // Two aircraft: draw a line between them
+          draw.strokeStyle = [0.5, 0.7, 1.0, 0.5];
+          draw.lineWidth = 1;
+          draw.beginPath();
+          const p1 = screenToWorld(callout.hullPoints[0]!.screenX, callout.hullPoints[0]!.screenY, matrix, w, h);
+          const p2 = screenToWorld(callout.hullPoints[1]!.screenX, callout.hullPoints[1]!.screenY, matrix, w, h);
+          draw.moveTo(p1.worldX, p1.worldY);
+          draw.lineTo(p2.worldX, p2.worldY);
+          draw.stroke();
+        }
+
+        // Draw leader line from box center to nearest hull point
         const boxCenterX = callout.boxX + callout.boxWidth / 2;
         const boxCenterY = callout.boxY + callout.boxHeight / 2;
         const boxCenter = screenToWorld(boxCenterX, boxCenterY, matrix, w, h);
