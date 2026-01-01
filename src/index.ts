@@ -42,3 +42,15 @@ export type {
   FontAtlasOptions,
   GeneratedFontAtlas,
 } from "./sdf/index";
+
+// Phase 0: Immediate Mode API
+export { DrawContext, DrawState, DynamicBuffer, PathBuilder } from "./immediate/index";
+export type {
+  DrawContextOptions,
+  Color as ImmediateColor,
+  LineCap,
+  LineJoin,
+  DrawStateValues,
+  DynamicBufferType,
+  Coord,
+} from "./immediate/index";

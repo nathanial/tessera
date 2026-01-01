@@ -4,6 +4,7 @@ import {
   InstancedPointRenderer,
   SDFRenderer,
   createFontAtlas,
+  DrawContext,
   type PointInstance,
   type PointShape,
   VERSION,
@@ -16,6 +17,10 @@ const tessera = new Tessera({ canvas });
 
 // Create feature renderer for GeoJSON overlay
 const featureRenderer = new FeatureRenderer(tessera.gl);
+
+// Create immediate mode draw context
+const draw = tessera.createDrawContext();
+console.log("Created immediate mode DrawContext");
 
 /**
  * Convert WGS84 coordinates to Web Mercator (0-1 world space)
@@ -836,6 +841,74 @@ tessera.render = function () {
   if (textReady) {
     sdfRenderer.render(matrix, w, h);
   }
+
+  // ============================================
+  // IMMEDIATE MODE DRAWING - Canvas-like API demo
+  // ============================================
+  draw.begin(matrix, w, h);
+
+  // Draw some animated shapes using immediate mode
+  const imTime = animationTime;
+
+  // Scale factor - world coords are 0-1, we need tiny sizes
+  const scale = 0.0002;
+
+  // Pulsing circle in the bay
+  const bayCenter = lngLatToWorld(-122.38, 37.82);
+  draw.fillStyle = [0.2, 0.6, 1.0, 0.4 + 0.2 * Math.sin(imTime * 2)];
+  draw.fillCircle(bayCenter[0], bayCenter[1], scale * (3 + Math.sin(imTime * 3)));
+
+  // Rotating triangle
+  draw.save();
+  draw.fillStyle = [1.0, 0.4, 0.2, 0.6];
+  draw.strokeStyle = [0.8, 0.2, 0.1, 1.0];
+  draw.lineWidth = 2;
+
+  const triCenter = lngLatToWorld(-122.35, 37.78);
+  const triRadius = scale * 4;
+  draw.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const angle = imTime + (i / 3) * Math.PI * 2;
+    const x = triCenter[0] + Math.cos(angle) * triRadius;
+    const y = triCenter[1] + Math.sin(angle) * triRadius;
+    if (i === 0) {
+      draw.moveTo(x, y);
+    } else {
+      draw.lineTo(x, y);
+    }
+  }
+  draw.closePath();
+  draw.fill();
+  draw.stroke();
+  draw.restore();
+
+  // Multiple small circles orbiting
+  draw.fillStyle = [0.9, 0.8, 0.2, 0.8];
+  const orbitCenter = lngLatToWorld(-122.45, 37.75);
+  for (let i = 0; i < 8; i++) {
+    const angle = imTime * 0.5 + (i / 8) * Math.PI * 2;
+    const ox = orbitCenter[0] + Math.cos(angle) * scale * 6;
+    const oy = orbitCenter[1] + Math.sin(angle) * scale * 6;
+    draw.fillCircle(ox, oy, scale * 1.5);
+  }
+
+  // Draw a wavy line
+  draw.strokeStyle = [0.2, 0.9, 0.4, 0.8];
+  draw.lineWidth = 3;
+  draw.lineCap = "round";
+  draw.beginPath();
+  const pathStart = lngLatToWorld(-122.50, 37.80);
+  draw.moveTo(pathStart[0], pathStart[1]);
+  for (let i = 1; i <= 10; i++) {
+    const t = i / 10;
+    const wave = Math.sin(t * Math.PI * 4 + imTime * 2) * scale * 4;
+    const px = pathStart[0] + t * scale * 30;
+    const py = pathStart[1] + wave;
+    draw.lineTo(px, py);
+  }
+  draw.stroke();
+
+  draw.end();
 
   // Request next frame to keep animation running
   this.requestRender();

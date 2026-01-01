@@ -5,6 +5,7 @@
 import { Camera } from "./Camera";
 import { Geometry } from "./Geometry";
 import { TileManager } from "./TileManager";
+import { DrawContext } from "./immediate/DrawContext";
 import { createProgram } from "./shaders/compile";
 import { tileVertexShader, tileFragmentShader, debugFragmentShader } from "./shaders/tile";
 
@@ -218,5 +219,31 @@ export class Tessera {
     this.gl.deleteProgram(this.program);
     this.gl.deleteProgram(this.debugProgram);
     this.quadGeometry.destroy();
+  }
+
+  /**
+   * Create an immediate-mode drawing context.
+   * Use this for Canvas 2D-like drawing API.
+   */
+  createDrawContext(): DrawContext {
+    return new DrawContext({ gl: this.gl });
+  }
+
+  /**
+   * Get the current view-projection matrix.
+   * Useful for passing to DrawContext.begin().
+   */
+  getMatrix(): Float32Array {
+    return this.camera.getMatrix(this.canvas.width, this.canvas.height);
+  }
+
+  /**
+   * Get the current viewport dimensions (accounting for DPR).
+   */
+  getViewport(): { width: number; height: number } {
+    return {
+      width: this.canvas.width,
+      height: this.canvas.height,
+    };
   }
 }
