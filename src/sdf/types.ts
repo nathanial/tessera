@@ -96,6 +96,8 @@ export interface TextStyle {
   haloColor?: Color;
   /** Halo width in pixels (default: 0, no halo) */
   haloWidth?: number;
+  /** Rotation in radians (default: 0) */
+  rotation?: number;
 }
 
 /** Icon style options */
@@ -118,6 +120,7 @@ export const DEFAULT_TEXT_STYLE: Required<TextStyle> = {
   align: "left",
   haloColor: [1, 1, 1, 0],
   haloWidth: 0,
+  rotation: 0,
 };
 
 /** Default icon style values */

@@ -404,6 +404,18 @@ const fontAtlas = createFontAtlas({
   fontFamily: "Arial, Helvetica, sans-serif",
 });
 
+// Store label data for animation
+interface LabelData {
+  text: string;
+  x: number;
+  y: number;
+  size: number;
+  color: [number, number, number, number];
+  rotationSpeed: number;
+}
+const allLabels: LabelData[] = [];
+let textRotationTime = 0;
+
 // Wait for font atlas to load, then add text labels
 let textReady = false;
 fontAtlas.ready.then(() => {
@@ -449,19 +461,21 @@ fontAtlas.ready.then(() => {
     labels.push({ text, lng, lat, size, color: [r, g, b, 1] });
   }
 
+  // Store labels for animated rotation
   for (const label of labels) {
     const [x, y] = lngLatToWorld(label.lng, label.lat);
-    sdfRenderer.addText(label.text, x, y, {
-      fontSize: label.size,
+    allLabels.push({
+      text: label.text,
+      x,
+      y,
+      size: label.size,
       color: label.color,
-      align: "center",
-      haloColor: [1, 1, 1, 0.8],
-      haloWidth: 2,
+      rotationSpeed: (Math.random() - 0.5) * 0.3, // Random rotation speed
     });
   }
 
   textReady = true;
-  console.log(`Added ${labels.length} text labels`);
+  console.log(`Added ${labels.length} text labels (animated rotation)`);
 });
 
 // ============================================
@@ -758,6 +772,23 @@ function updateAnimations(dt: number) {
   // Spawn new polygons to maintain count
   while (animatedPolygons.length < MAX_ANIMATED_POLYGONS) {
     animatedPolygons.push(createAnimatedPolygon());
+  }
+
+  // Update text rotation
+  if (textReady && allLabels.length > 0) {
+    textRotationTime += dt;
+    sdfRenderer.clearText();
+    for (const label of allLabels) {
+      const rotation = textRotationTime * label.rotationSpeed;
+      sdfRenderer.addText(label.text, label.x, label.y, {
+        fontSize: label.size,
+        color: label.color,
+        align: "center",
+        haloColor: [1, 1, 1, 0.8],
+        haloWidth: 2,
+        rotation,
+      });
+    }
   }
 }
 

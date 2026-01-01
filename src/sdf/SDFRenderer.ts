@@ -266,19 +266,25 @@ export class SDFRenderer {
       const scale = label.style.fontSize / metadata.size;
       const anchorX = label.position[0];
       const anchorY = label.position[1];
+      const rotation = label.style.rotation;
+      const cos = Math.cos(rotation);
+      const sin = Math.sin(rotation);
 
-      // Calculate text width in pixels for alignment
+      // Calculate text dimensions in pixels for alignment
       let textWidth = 0;
+      let textHeight = 0;
       for (let i = 0; i < label.text.length; i++) {
         const charCode = label.text.charCodeAt(i);
         const glyph = metadata.glyphs[charCode];
         if (glyph) {
           textWidth += glyph.xAdvance * scale;
+          textHeight = Math.max(textHeight, glyph.height * scale);
         }
       }
 
-      // Calculate starting pixel offset for alignment
+      // Calculate starting pixel offset for alignment (center text vertically too)
       let offsetStartX = 0;
+      const offsetStartY = -textHeight / 2;
       if (label.style.align === "center") {
         offsetStartX = -textWidth / 2;
       } else if (label.style.align === "right") {
@@ -294,11 +300,11 @@ export class SDFRenderer {
         const glyph = metadata.glyphs[charCode];
         if (!glyph) continue;
 
-        // Pixel offsets for quad corners (relative to anchor)
-        const ox0 = pixelOffsetX + glyph.xOffset * scale;
-        const oy0 = glyph.yOffset * scale;
-        const ox1 = ox0 + glyph.width * scale;
-        const oy1 = oy0 + glyph.height * scale;
+        // Pixel offsets for quad corners (relative to anchor, before rotation)
+        const lx0 = pixelOffsetX + glyph.xOffset * scale;
+        const ly0 = offsetStartY + glyph.yOffset * scale;
+        const lx1 = lx0 + glyph.width * scale;
+        const ly1 = ly0 + glyph.height * scale;
 
         // UV coordinates (normalized 0-1)
         const u0 = glyph.x / metadata.atlasWidth;
@@ -306,11 +312,19 @@ export class SDFRenderer {
         const u1 = (glyph.x + glyph.width) / metadata.atlasWidth;
         const v1 = (glyph.y + glyph.height) / metadata.atlasHeight;
 
-        // Add 4 vertices per glyph: (anchorX, anchorY, offsetX, offsetY, u, v)
-        vertices.push(anchorX, anchorY, ox0, oy0, u0, v0);
-        vertices.push(anchorX, anchorY, ox1, oy0, u1, v0);
-        vertices.push(anchorX, anchorY, ox0, oy1, u0, v1);
-        vertices.push(anchorX, anchorY, ox1, oy1, u1, v1);
+        // Rotate each corner offset
+        const corners: [number, number, number, number][] = [
+          [lx0, ly0, u0, v0],
+          [lx1, ly0, u1, v0],
+          [lx0, ly1, u0, v1],
+          [lx1, ly1, u1, v1],
+        ];
+
+        for (const [lx, ly, u, v] of corners) {
+          const rx = cos * lx - sin * ly;
+          const ry = sin * lx + cos * ly;
+          vertices.push(anchorX, anchorY, rx, ry, u, v);
+        }
 
         // Add 2 triangles (6 indices) per glyph
         const base = vertexCount;
