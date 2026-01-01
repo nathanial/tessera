@@ -60,6 +60,8 @@ export interface PlacementOptions {
   calloutThreshold: number;   // Number of overlapping labels before using callout
   maxCalloutLabels: number;   // Max labels shown in callout before "+N more"
   leaderLineMargin: number;   // Min distance to displace label
+  hysteresisMargin: number;   // Pixels - must move this far past boundary to switch clusters
+  worldCellSize: number;      // World-space cell size for clustering (stable across pan)
 }
 
 // ============================================
@@ -166,16 +168,58 @@ const DEFAULT_OPTIONS: PlacementOptions = {
   calloutThreshold: 4,
   maxCalloutLabels: 5,
   leaderLineMargin: 30,
+  hysteresisMargin: 20,
+  worldCellSize: 0.02,  // World units - stable clustering across pan
 };
 
 /** Function to measure text width */
 export type TextMeasureFn = (text: string, fontSize: number) => number;
+
+interface CachedCallout {
+  boxX: number;
+  boxY: number;
+  boxWidth: number;
+  boxHeight: number;
+  centroidX: number;
+  centroidY: number;
+}
+
+/** Tracks placement decision for each label for frame-to-frame stability */
+interface CachedPlacement {
+  type: 'direct' | 'leader' | 'callout';
+  leaderOffsetIndex?: number;  // Which offset position was used for leader lines
+}
+
+// Standard offsets for leader line placement (indexed for caching)
+const LEADER_OFFSETS = [
+  // Right positions (preferred)
+  { x: 1, y: 0 },       // 0: right
+  { x: 1, y: -1 },      // 1: right-up
+  { x: 1, y: 1 },       // 2: right-down
+  // Left positions
+  { x: -1, y: 0 },      // 3: left
+  { x: -1, y: -1 },     // 4: left-up
+  { x: -1, y: 1 },      // 5: left-down
+  // Above/below
+  { x: 0, y: -1 },      // 6: above
+  { x: 0, y: 1 },       // 7: below
+  // Further out
+  { x: 2, y: 0 },       // 8: far right
+  { x: 2, y: -2 },      // 9: far right-up
+  { x: 2, y: 2 },       // 10: far right-down
+];
 
 export class LabelPlacer {
   private options: PlacementOptions;
   private grid: SpatialGrid;
   private widthCache: Map<string, number> = new Map();
   private measureFn?: TextMeasureFn;
+
+  // Hysteresis state for stable clustering
+  private prevClusterAssignments: Map<string, string> = new Map();  // labelId → clusterKey
+  private prevCalloutPositions: Map<string, CachedCallout> = new Map();  // clusterKey → cached callout
+  private prevPlacements: Map<string, CachedPlacement> = new Map();  // labelId → placement type
+  private newPlacements: Map<string, CachedPlacement> = new Map();  // current frame placements
 
   constructor(options: Partial<PlacementOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -196,6 +240,16 @@ export class LabelPlacer {
   }
 
   /**
+   * Clear hysteresis state. Call on significant zoom changes or data refresh.
+   */
+  clearState(): void {
+    this.prevClusterAssignments.clear();
+    this.prevCalloutPositions.clear();
+    this.prevPlacements.clear();
+    this.newPlacements.clear();
+  }
+
+  /**
    * Place labels with overlap resolution
    */
   place(
@@ -206,6 +260,7 @@ export class LabelPlacer {
     labelOffsetX: number = 10  // Pixels offset from anchor
   ): PlacementResult {
     this.grid.clear();
+    this.newPlacements.clear();
 
     const directLabels: PlacedLabel[] = [];
     const displaced: PlacedLabel[] = [];
@@ -213,7 +268,7 @@ export class LabelPlacer {
     // Sort by priority (higher first)
     const sorted = [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
-    // First pass: try direct placement
+    // First pass: try direct placement with hysteresis
     for (const item of sorted) {
       const anchor = worldToScreen(item.anchorX, item.anchorY);
 
@@ -237,18 +292,41 @@ export class LabelPlacer {
         height: labelHeight + this.options.padding * 2,
       };
 
-      if (!this.grid.hasOverlap(bounds)) {
-        // No overlap - place directly
-        this.grid.insert(bounds);
-        directLabels.push({
-          item,
-          screenX: preferredX,
-          screenY: preferredY,
-          anchorScreenX: anchor.screenX,
-          anchorScreenY: anchor.screenY,
-          needsLeaderLine: false,
-          bounds,
-        });
+      const prevPlacement = this.prevPlacements.get(item.id);
+      const wasDirect = prevPlacement?.type === 'direct';
+      const hasOverlap = this.grid.hasOverlap(bounds);
+
+      // Hysteresis: prefer staying in previous placement type
+      // If was direct and now overlaps, still try direct (be sticky)
+      // Only displace if overlap is significant
+      if (!hasOverlap || (wasDirect && hasOverlap)) {
+        // Check if we should force direct placement (hysteresis)
+        if (!hasOverlap) {
+          // No overlap - place directly
+          this.grid.insert(bounds);
+          directLabels.push({
+            item,
+            screenX: preferredX,
+            screenY: preferredY,
+            anchorScreenX: anchor.screenX,
+            anchorScreenY: anchor.screenY,
+            needsLeaderLine: false,
+            bounds,
+          });
+          this.newPlacements.set(item.id, { type: 'direct' });
+        } else {
+          // Was direct, now overlaps - mark for displacement
+          // (We tried to stay direct but can't)
+          displaced.push({
+            item,
+            screenX: preferredX,
+            screenY: preferredY,
+            anchorScreenX: anchor.screenX,
+            anchorScreenY: anchor.screenY,
+            needsLeaderLine: true,
+            bounds,
+          });
+        }
       } else {
         // Mark for displacement
         displaced.push({
@@ -264,11 +342,32 @@ export class LabelPlacer {
     }
 
     // Second pass: cluster displaced labels and create callouts
-    const { leaderLabels, callouts } = this.resolveDisplaced(
+    const { leaderLabels, callouts, newClusterAssignments } = this.resolveDisplaced(
       displaced,
       viewportWidth,
       viewportHeight
     );
+
+    // Update hysteresis state for next frame
+    this.prevClusterAssignments = newClusterAssignments;
+
+    // Update callout position cache for next frame
+    this.prevCalloutPositions.clear();
+    for (const callout of callouts) {
+      const key = callout.items.map(i => i.id).sort().join(',');
+      this.prevCalloutPositions.set(key, {
+        boxX: callout.boxX,
+        boxY: callout.boxY,
+        boxWidth: callout.boxWidth,
+        boxHeight: callout.boxHeight,
+        centroidX: callout.targetX,
+        centroidY: callout.targetY,
+      });
+    }
+
+    // Update placement type cache for next frame
+    this.prevPlacements = this.newPlacements;
+    this.newPlacements = new Map();
 
     return { directLabels, leaderLabels, callouts };
   }
@@ -305,19 +404,24 @@ export class LabelPlacer {
     displaced: PlacedLabel[],
     viewportWidth: number,
     viewportHeight: number
-  ): { leaderLabels: PlacedLabel[]; callouts: StackedCallout[] } {
+  ): { leaderLabels: PlacedLabel[]; callouts: StackedCallout[]; newClusterAssignments: Map<string, string> } {
     if (displaced.length === 0) {
-      return { leaderLabels: [], callouts: [] };
+      return { leaderLabels: [], callouts: [], newClusterAssignments: new Map() };
     }
 
-    // Cluster nearby displaced labels using grid-based clustering
+    // Cluster labels using WORLD-SPACE coordinates (stable across pan/zoom)
     const clusterGrid = new Map<string, PlacedLabel[]>();
-    const clusterCellSize = this.options.fontSize * 6; // Larger cells for clustering
+    const worldCellSize = this.options.worldCellSize;
+    const newClusterAssignments = new Map<string, string>();
 
     for (const label of displaced) {
-      const cx = Math.floor(label.anchorScreenX / clusterCellSize);
-      const cy = Math.floor(label.anchorScreenY / clusterCellSize);
+      // Use WORLD coordinates for clustering - this is stable during panning
+      const cx = Math.floor(label.item.anchorX / worldCellSize);
+      const cy = Math.floor(label.item.anchorY / worldCellSize);
       const key = `${cx},${cy}`;
+
+      // Store assignment (no hysteresis needed - world coords are stable)
+      newClusterAssignments.set(label.item.id, key);
 
       let cluster = clusterGrid.get(key);
       if (!cluster) {
@@ -348,7 +452,7 @@ export class LabelPlacer {
       }
     }
 
-    return { leaderLabels, callouts };
+    return { leaderLabels, callouts, newClusterAssignments };
   }
 
   private tryPlaceWithLeader(
@@ -360,28 +464,36 @@ export class LabelPlacer {
     const labelWidth = this.measureText(label.item.text);
     const labelHeight = fontSize * lineHeight;
 
-    // Try positions in expanding rings around the anchor
-    const offsets = [
-      // Right positions (preferred)
-      { x: leaderLineMargin, y: 0 },
-      { x: leaderLineMargin, y: -leaderLineMargin },
-      { x: leaderLineMargin, y: leaderLineMargin },
-      // Left positions
-      { x: -leaderLineMargin - labelWidth, y: 0 },
-      { x: -leaderLineMargin - labelWidth, y: -leaderLineMargin },
-      { x: -leaderLineMargin - labelWidth, y: leaderLineMargin },
-      // Above/below
-      { x: 0, y: -leaderLineMargin - labelHeight },
-      { x: 0, y: leaderLineMargin },
-      // Further out
-      { x: leaderLineMargin * 2, y: 0 },
-      { x: leaderLineMargin * 2, y: -leaderLineMargin * 2 },
-      { x: leaderLineMargin * 2, y: leaderLineMargin * 2 },
-    ];
+    // Check for cached offset from previous frame
+    const prevPlacement = this.prevPlacements.get(label.item.id);
+    const prevOffsetIndex = prevPlacement?.type === 'leader' ? prevPlacement.leaderOffsetIndex : undefined;
 
-    for (const offset of offsets) {
-      const screenX = label.anchorScreenX + offset.x;
-      const screenY = label.anchorScreenY + offset.y - labelHeight / 2;
+    // Build order of indices to try - prefer previous position first
+    const indicesToTry: number[] = [];
+    if (prevOffsetIndex !== undefined && prevOffsetIndex >= 0 && prevOffsetIndex < LEADER_OFFSETS.length) {
+      indicesToTry.push(prevOffsetIndex);
+    }
+    for (let i = 0; i < LEADER_OFFSETS.length; i++) {
+      if (i !== prevOffsetIndex) {
+        indicesToTry.push(i);
+      }
+    }
+
+    // Try each position
+    for (const idx of indicesToTry) {
+      const offsetDef = LEADER_OFFSETS[idx]!;
+
+      // Convert normalized offset to pixels
+      let offsetX: number;
+      if (offsetDef.x < 0) {
+        offsetX = offsetDef.x * leaderLineMargin - labelWidth;
+      } else {
+        offsetX = offsetDef.x * leaderLineMargin;
+      }
+      const offsetY = offsetDef.y * leaderLineMargin;
+
+      const screenX = label.anchorScreenX + offsetX;
+      const screenY = label.anchorScreenY + offsetY - labelHeight / 2;
 
       // Check viewport bounds
       if (screenX < 0 || screenX + labelWidth > viewportWidth ||
@@ -398,6 +510,8 @@ export class LabelPlacer {
 
       if (!this.grid.hasOverlap(bounds)) {
         this.grid.insert(bounds);
+        // Track which offset was used
+        this.newPlacements.set(label.item.id, { type: 'leader', leaderOffsetIndex: idx });
         return {
           ...label,
           screenX,
@@ -417,7 +531,7 @@ export class LabelPlacer {
     viewportWidth: number,
     viewportHeight: number
   ): StackedCallout | null {
-    const { padding, fontSize, lineHeight, maxCalloutLabels } = this.options;
+    const { padding, fontSize, lineHeight, maxCalloutLabels, hysteresisMargin } = this.options;
 
     // Calculate cluster centroid
     let centroidX = 0;
@@ -442,6 +556,42 @@ export class LabelPlacer {
     const moreWidth = moreText ? this.measureText(moreText) : 0;
     const boxWidth = Math.max(maxTextWidth, moreWidth) + padding * 2;
     const boxHeight = (displayCount + (moreText ? 1 : 0)) * fontSize * lineHeight + padding * 2;
+
+    // Check for cached position (hysteresis)
+    const clusterKey = items.map(i => i.id).sort().join(',');
+    const cached = this.prevCalloutPositions.get(clusterKey);
+
+    if (cached) {
+      // Check if centroid moved significantly
+      const centroidDelta = Math.hypot(centroidX - cached.centroidX, centroidY - cached.centroidY);
+
+      if (centroidDelta < hysteresisMargin) {
+        // Try to use cached position (may need to adjust if box size changed)
+        const boxX = Math.max(padding, Math.min(viewportWidth - boxWidth - padding, cached.boxX));
+        const boxY = Math.max(padding, Math.min(viewportHeight - boxHeight - padding, cached.boxY));
+
+        const bounds: BoundingBox = {
+          x: boxX,
+          y: boxY,
+          width: boxWidth,
+          height: boxHeight,
+        };
+
+        if (!this.grid.hasOverlap(bounds)) {
+          this.grid.insert(bounds);
+          return {
+            items: items.slice(0, displayCount),
+            boxX,
+            boxY,
+            boxWidth,
+            boxHeight,
+            targetX: centroidX,
+            targetY: centroidY,
+          };
+        }
+        // Cached position overlaps now, fall through to find new position
+      }
+    }
 
     // Try to place callout near centroid
     const positions = [
