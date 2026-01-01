@@ -7,6 +7,9 @@
 
 import { lonLatToTessera } from "../src/index";
 
+// Speed multiplier for visual effect (1 = realistic, higher = faster animation)
+const SPEED_MULTIPLIER = 1;
+
 export interface Aircraft {
   icao24: string;
   callsign: string | null;
@@ -326,8 +329,8 @@ export class ADSBLayer {
       // Current altitude based on flight phase
       const altitude = calculateFlightAltitude(progress, cruiseAltitude);
 
-      // Velocity (exaggerated 20x for visual effect)
-      const velocity = (5000 + Math.random() * 3000) * 20; // 100000-160000 m/s
+      // Velocity (base 5000-8000 m/s, scaled by SPEED_MULTIPLIER)
+      const velocity = (5000 + Math.random() * 3000) * SPEED_MULTIPLIER;
 
       this.simAircraft.push({
         icao24: randomIcao24(),

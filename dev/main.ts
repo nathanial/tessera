@@ -9,8 +9,8 @@ console.log(`Tessera v${VERSION}`);
 // ============================================
 
 // Grid cell dimensions in pixels for label clustering
-const LABEL_CELL_WIDTH = 150;  // Wide cells for horizontal label text
-const LABEL_CELL_HEIGHT = 30;  // Short cells to separate vertical stacking
+const LABEL_CELL_WIDTH = 160;  // Wide cells for horizontal label text
+const LABEL_CELL_HEIGHT = 40;  // Short cells to separate vertical stacking
 let DEBUG_SHOW_GRID = false;   // Toggle with 'G' key
 
 // Estimated label dimensions for center-based binning
