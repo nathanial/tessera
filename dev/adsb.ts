@@ -9,6 +9,16 @@ import { lonLatToTessera } from "../src/index";
 
 const OPENSKY_API = "https://opensky-network.org/api/states/all";
 
+// CORS proxy for production (OpenSky doesn't allow cross-origin requests)
+const CORS_PROXY = "https://corsproxy.io/?";
+
+function getApiUrl(): string {
+  // Use proxy in production (when not on localhost)
+  const isLocalhost = typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+  return isLocalhost ? OPENSKY_API : CORS_PROXY + encodeURIComponent(OPENSKY_API);
+}
+
 export interface Aircraft {
   icao24: string;
   callsign: string | null;
@@ -34,7 +44,7 @@ export class ADSBLayer {
 
     this.isFetching = true;
     try {
-      const response = await fetch(OPENSKY_API);
+      const response = await fetch(getApiUrl());
       if (!response.ok) {
         console.warn(`[ADSB] API error: ${response.status}`);
         return;
