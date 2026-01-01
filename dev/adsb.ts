@@ -331,8 +331,8 @@ export class ADSBLayer {
       // Current altitude based on flight phase
       const altitude = calculateFlightAltitude(progress, cruiseAltitude);
 
-      // Velocity (exaggerated for visual effect)
-      const velocity = 5000 + Math.random() * 3000; // 5000-8000 m/s
+      // Velocity (exaggerated 20x for visual effect)
+      const velocity = (5000 + Math.random() * 3000) * 20; // 100000-160000 m/s
 
       this.simAircraft.push({
         icao24: randomIcao24(),

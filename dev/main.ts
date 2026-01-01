@@ -107,10 +107,10 @@ fontAtlas.ready.then(() => {
 
 // Text styling for aircraft labels
 const labelStyle = {
-  fontSize: 24,
+  fontSize: 18,
   color: [1, 1, 1, 1] as [number, number, number, number],
   haloColor: [0, 0, 0, 0.8] as [number, number, number, number],
-  haloWidth: 3,
+  haloWidth: 2,
   align: "left" as const,
 };
 
@@ -289,9 +289,7 @@ const aircraftVertices = [
 ];
 const aircraftIndices = earcut(aircraftVertices);
 
-const AIRCRAFT_MIN_SCREEN_SIZE = 12; // Minimum size in pixels (when zoomed out)
-const AIRCRAFT_MAX_SCREEN_SIZE = 50; // Maximum size in pixels (when zoomed in)
-const AIRCRAFT_BASE_WORLD_SIZE = 0.0015; // Base size that scales with zoom
+const AIRCRAFT_SCREEN_SIZE = 15; // Fixed size in pixels
 
 // Initialize ADSB layer with simulated aircraft
 const adsbLayer = new ADSBLayer(10000); // 10k simulated aircraft
@@ -392,18 +390,10 @@ tessera.render = function () {
   // ============================================
   // DRAW AIRCRAFT
   // ============================================
-  // Compute size: scales with zoom, clamped between min/max screen pixels
+  // Fixed screen size converted to world coordinates
   const viewWidth = bounds.right - bounds.left;
   const pixelsPerWorldUnit = w / viewWidth;
-
-  // Calculate what screen size the base world size would produce
-  let screenSize = AIRCRAFT_BASE_WORLD_SIZE * pixelsPerWorldUnit;
-
-  // Clamp to min/max screen size
-  screenSize = Math.max(AIRCRAFT_MIN_SCREEN_SIZE, Math.min(AIRCRAFT_MAX_SCREEN_SIZE, screenSize));
-
-  // Convert back to world size
-  const aircraftSize = screenSize / pixelsPerWorldUnit;
+  const aircraftSize = AIRCRAFT_SCREEN_SIZE / pixelsPerWorldUnit;
 
   let aircraftDrawn = 0;
   for (const ac of adsbLayer.aircraft) {
