@@ -3,6 +3,7 @@
  */
 
 import { Camera } from "./Camera";
+import { Geometry } from "./Geometry";
 import { TileManager } from "./TileManager";
 import { createProgram } from "./shaders/compile";
 import { tileVertexShader, tileFragmentShader, debugFragmentShader } from "./shaders/tile";
@@ -19,8 +20,7 @@ export class Tessera {
   private tileManager: TileManager;
   private program: WebGLProgram;
   private debugProgram: WebGLProgram;
-  private quadVAO: WebGLVertexArrayObject;
-  private quadVBO: WebGLBuffer;
+  private quadGeometry: Geometry;
 
   // Uniform locations
   private uniforms: {
@@ -70,33 +70,7 @@ export class Tessera {
     };
 
     // Create quad geometry
-    const quadVAO = gl.createVertexArray();
-    const quadVBO = gl.createBuffer();
-    if (!quadVAO || !quadVBO) {
-      throw new Error("Failed to create buffers");
-    }
-    this.quadVAO = quadVAO;
-    this.quadVBO = quadVBO;
-
-    gl.bindVertexArray(this.quadVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.quadVBO);
-
-    // Quad vertices (two triangles)
-    const vertices = new Float32Array([
-      0, 0,
-      1, 0,
-      0, 1,
-      0, 1,
-      1, 0,
-      1, 1,
-    ]);
-    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-
-    const positionLoc = gl.getAttribLocation(this.program, "a_position");
-    gl.enableVertexAttribArray(positionLoc);
-    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
-
-    gl.bindVertexArray(null);
+    this.quadGeometry = Geometry.createQuad(gl);
 
     // Initial resize
     this.resize();
@@ -157,7 +131,7 @@ export class Tessera {
 
     // Setup shader
     gl.useProgram(this.program);
-    gl.bindVertexArray(this.quadVAO);
+    this.quadGeometry.bind();
 
     // Camera matrix
     const matrix = this.camera.getMatrix(width, height);
@@ -182,7 +156,7 @@ export class Tessera {
 
     for (const tile of tiles) {
       gl.uniform2f(this.debugUniforms.tileOffset, tile.x, tile.y);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      this.quadGeometry.draw();
     }
 
     // Second pass: overdraw with textured tiles where available
@@ -203,14 +177,14 @@ export class Tessera {
       loadedCount++;
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.uniform2f(this.uniforms.tileOffset, tile.x, tile.y);
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      this.quadGeometry.draw();
     }
 
     if (now - this.lastDebugTime < 100 && loadedCount > 0) {
       console.log(`[Tessera] rendered ${loadedCount}/${tiles.length} tiles`);
     }
 
-    gl.bindVertexArray(null);
+    this.quadGeometry.unbind();
   }
 
   /** Start the render loop */
@@ -242,7 +216,7 @@ export class Tessera {
     this.stop();
     this.tileManager.destroy();
     this.gl.deleteProgram(this.program);
-    this.gl.deleteVertexArray(this.quadVAO);
-    this.gl.deleteBuffer(this.quadVBO);
+    this.gl.deleteProgram(this.debugProgram);
+    this.quadGeometry.destroy();
   }
 }

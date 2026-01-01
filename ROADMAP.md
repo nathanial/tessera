@@ -1,12 +1,13 @@
 # Tessera Roadmap
 
-## Phase 1: Core Foundation
+## Phase 1: Core Foundation ✅
 
-- [ ] **Tessera Class** - WebGL2 context management and render loop
-- [ ] **Buffer Management** - Vertex/index buffer abstraction with VRAM lifecycle
-- [ ] **Shader System** - Compile, link, and uniform management
-- [ ] **Matrix Utilities** - 3x3 transform matrices for 2D (translate, rotate, scale)
-- [ ] **Viewport & Camera** - Pan/zoom with matrix uniforms
+- [x] **Tessera Class** - WebGL2 context management and render loop
+- [x] **Shader System** - Compile, link, and uniform management
+- [x] **Matrix Utilities** - 3x3 transform matrices for 2D (translate, rotate, scale)
+- [x] **Viewport & Camera** - Pan/zoom with matrix uniforms
+- [x] **Tile Rendering** - Raster tile loading with retina support (Carto Voyager @2x)
+- [x] **Buffer Management** - Vertex/index buffer abstraction with VRAM lifecycle
 
 ## Phase 2: Geometry Pipeline
 
