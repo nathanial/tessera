@@ -78,7 +78,8 @@ export class PathBuilder {
     }
 
     const absAngle = Math.abs(angleDiff);
-    const segments = Math.max(8, Math.ceil(absAngle * radius * 2));
+    // Use 32 segments for a full circle, scaled by arc angle
+    const segments = Math.max(8, Math.ceil((absAngle / (Math.PI * 2)) * 32));
 
     // Start point
     const startX = cx + Math.cos(startAngle) * radius;
