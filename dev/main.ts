@@ -8,8 +8,14 @@ console.log(`Tessera v${VERSION}`);
 // LABEL CLUSTERING (Spatial Binning)
 // ============================================
 
-const LABEL_CELL_SIZE = 120; // Grid cell size in pixels for clustering
-let DEBUG_SHOW_GRID = false; // Toggle with 'G' key
+// Grid cell dimensions in pixels for label clustering
+const LABEL_CELL_WIDTH = 150;  // Wide cells for horizontal label text
+const LABEL_CELL_HEIGHT = 30;  // Short cells to separate vertical stacking
+let DEBUG_SHOW_GRID = false;   // Toggle with 'G' key
+
+// Estimated label dimensions for center-based binning
+const LABEL_AVG_CHARS = 10;    // Average characters in label (e.g., "AAL123 +4")
+const LABEL_CHAR_WIDTH = 0.55; // Approximate width per character as fraction of font size
 
 interface ClusterableItem {
   x: number;
@@ -76,6 +82,8 @@ function clusterLabels(
   matrix: Float32Array,
   viewportWidth: number,
   viewportHeight: number,
+  labelOffsetWorld: number,
+  labelFontSize: number,
   fixedGridOffset?: { x: number; y: number }
 ): { clusters: LabelCluster[]; gridOffset: { x: number; y: number } } {
   const grid = new Map<string, LabelCluster>();
@@ -83,25 +91,34 @@ function clusterLabels(
   // Calculate current grid offset from world origin
   const origin = worldToScreen(0, 0, matrix, viewportWidth, viewportHeight);
   const currentOffset = {
-    x: ((origin.screenX % LABEL_CELL_SIZE) + LABEL_CELL_SIZE) % LABEL_CELL_SIZE,
-    y: ((origin.screenY % LABEL_CELL_SIZE) + LABEL_CELL_SIZE) % LABEL_CELL_SIZE,
+    x: ((origin.screenX % LABEL_CELL_WIDTH) + LABEL_CELL_WIDTH) % LABEL_CELL_WIDTH,
+    y: ((origin.screenY % LABEL_CELL_HEIGHT) + LABEL_CELL_HEIGHT) % LABEL_CELL_HEIGHT,
   };
 
   // Use fixed offset if provided (for stable clustering during zoom)
   const gridOffsetX = fixedGridOffset?.x ?? currentOffset.x;
   const gridOffsetY = fixedGridOffset?.y ?? currentOffset.y;
 
-  for (const ac of aircraft) {
-    const { screenX, screenY } = worldToScreen(ac.x, ac.y, matrix, viewportWidth, viewportHeight);
+  // Estimate label width in screen pixels for center-based binning
+  const estLabelWidth = labelFontSize * LABEL_CHAR_WIDTH * LABEL_AVG_CHARS;
+  const halfLabelWidth = estLabelWidth / 2;
 
-    // Skip if off-screen (always use current visibility)
+  for (const ac of aircraft) {
+    // Use LABEL position for binning, not aircraft position
+    // Labels are offset to the right of aircraft
+    const labelX = ac.x + labelOffsetWorld;
+    const labelY = ac.y;
+    const { screenX, screenY } = worldToScreen(labelX, labelY, matrix, viewportWidth, viewportHeight);
+
+    // Skip if label is off-screen
     if (screenX < 0 || screenX > viewportWidth || screenY < 0 || screenY > viewportHeight) {
       continue;
     }
 
-    // Use grid offset for cell assignment (may be cached for stable grouping)
-    const cellX = Math.floor((screenX - gridOffsetX) / LABEL_CELL_SIZE);
-    const cellY = Math.floor((screenY - gridOffsetY) / LABEL_CELL_SIZE);
+    // Use label CENTER for cell assignment (improves border behavior)
+    const labelCenterX = screenX + halfLabelWidth;
+    const cellX = Math.floor((labelCenterX - gridOffsetX) / LABEL_CELL_WIDTH);
+    const cellY = Math.floor((screenY - gridOffsetY) / LABEL_CELL_HEIGHT);
     const key = `${cellX}_${cellY}`;
 
     let cluster = grid.get(key);
@@ -461,6 +478,8 @@ tessera.render = function () {
     matrix,
     w,
     h,
+    labelOffsetWorld,
+    labelStyle.fontSize,
     isZooming ? cachedGridOffset ?? undefined : undefined
   );
 
@@ -479,7 +498,7 @@ tessera.render = function () {
     const effectiveOffset = isZooming && cachedGridOffset ? cachedGridOffset : gridOffset;
 
     // Draw vertical lines
-    for (let screenX = effectiveOffset.x; screenX <= w; screenX += LABEL_CELL_SIZE) {
+    for (let screenX = effectiveOffset.x; screenX <= w; screenX += LABEL_CELL_WIDTH) {
       const top = screenToWorld(screenX, 0, matrix, w, h);
       const bottom = screenToWorld(screenX, h, matrix, w, h);
       draw.beginPath();
@@ -488,7 +507,7 @@ tessera.render = function () {
       draw.stroke();
     }
     // Draw lines going left from offset
-    for (let screenX = effectiveOffset.x - LABEL_CELL_SIZE; screenX >= 0; screenX -= LABEL_CELL_SIZE) {
+    for (let screenX = effectiveOffset.x - LABEL_CELL_WIDTH; screenX >= 0; screenX -= LABEL_CELL_WIDTH) {
       const top = screenToWorld(screenX, 0, matrix, w, h);
       const bottom = screenToWorld(screenX, h, matrix, w, h);
       draw.beginPath();
@@ -498,7 +517,7 @@ tessera.render = function () {
     }
 
     // Draw horizontal lines
-    for (let screenY = effectiveOffset.y; screenY <= h; screenY += LABEL_CELL_SIZE) {
+    for (let screenY = effectiveOffset.y; screenY <= h; screenY += LABEL_CELL_HEIGHT) {
       const left = screenToWorld(0, screenY, matrix, w, h);
       const right = screenToWorld(w, screenY, matrix, w, h);
       draw.beginPath();
@@ -507,7 +526,7 @@ tessera.render = function () {
       draw.stroke();
     }
     // Draw lines going up from offset
-    for (let screenY = effectiveOffset.y - LABEL_CELL_SIZE; screenY >= 0; screenY -= LABEL_CELL_SIZE) {
+    for (let screenY = effectiveOffset.y - LABEL_CELL_HEIGHT; screenY >= 0; screenY -= LABEL_CELL_HEIGHT) {
       const left = screenToWorld(0, screenY, matrix, w, h);
       const right = screenToWorld(w, screenY, matrix, w, h);
       draw.beginPath();
