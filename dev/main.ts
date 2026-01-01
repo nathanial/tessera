@@ -1,4 +1,4 @@
-import { Tessera, DrawContext, VERSION, lonLatToTessera, SDFRenderer, createFontAtlas } from "../src/index";
+import { Tessera, DrawContext, VERSION, lonLatToTessera, SDFRenderer, createFontAtlas, TextLayout } from "../src/index";
 import earcut from "earcut";
 import { ADSBLayer, getAltitudeColor } from "./adsb";
 import { loadStateBorderPoints, type BorderPoint } from "./borders";
@@ -109,6 +109,11 @@ const fontAtlas = createFontAtlas({
 });
 fontAtlas.ready.then(() => {
   sdfRenderer.loadFontAtlas(fontAtlas.metadata, fontAtlas.image);
+
+  // Create TextLayout for accurate text measurement
+  const textLayout = new TextLayout(fontAtlas.metadata);
+  labelPlacer.setMeasureFunction((text, fontSize) => textLayout.measureLine(text, fontSize));
+
   console.log("Font atlas loaded for aircraft labels");
 });
 

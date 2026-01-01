@@ -168,13 +168,26 @@ const DEFAULT_OPTIONS: PlacementOptions = {
   leaderLineMargin: 30,
 };
 
+/** Function to measure text width */
+export type TextMeasureFn = (text: string, fontSize: number) => number;
+
 export class LabelPlacer {
   private options: PlacementOptions;
   private grid: SpatialGrid;
+  private widthCache: Map<string, number> = new Map();
+  private measureFn?: TextMeasureFn;
 
   constructor(options: Partial<PlacementOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.grid = new SpatialGrid(this.options.fontSize * 4);
+  }
+
+  /**
+   * Set the text measurement function (e.g., from TextLayout.measureLine)
+   */
+  setMeasureFunction(fn: TextMeasureFn): void {
+    this.measureFn = fn;
+    this.widthCache.clear();
   }
 
   updateOptions(options: Partial<PlacementOptions>): void {
@@ -210,7 +223,7 @@ export class LabelPlacer {
         continue;
       }
 
-      const labelWidth = this.estimateLabelWidth(item.text);
+      const labelWidth = this.measureText(item.text);
       const labelHeight = this.options.fontSize * this.options.lineHeight;
 
       // Try preferred position (right of anchor)
@@ -260,8 +273,32 @@ export class LabelPlacer {
     return { directLabels, leaderLabels, callouts };
   }
 
-  private estimateLabelWidth(text: string): number {
-    return text.length * this.options.fontSize * this.options.charWidth;
+  /**
+   * Measure text width with caching.
+   * Uses actual measurement if measureFn is set, otherwise estimates.
+   */
+  private measureText(text: string): number {
+    const fontSize = this.options.fontSize;
+
+    // Try cache first
+    const key = `${text}:${fontSize}`;
+    const cached = this.widthCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    // Measure or estimate
+    let width: number;
+    if (this.measureFn) {
+      width = this.measureFn(text, fontSize);
+    } else {
+      // Fallback to estimation
+      width = text.length * fontSize * this.options.charWidth;
+    }
+
+    // Cache and return
+    this.widthCache.set(key, width);
+    return width;
   }
 
   private resolveDisplaced(
@@ -320,7 +357,7 @@ export class LabelPlacer {
     viewportHeight: number
   ): PlacedLabel | null {
     const { leaderLineMargin, padding, fontSize, lineHeight } = this.options;
-    const labelWidth = this.estimateLabelWidth(label.item.text);
+    const labelWidth = this.measureText(label.item.text);
     const labelHeight = fontSize * lineHeight;
 
     // Try positions in expanding rings around the anchor
@@ -399,10 +436,10 @@ export class LabelPlacer {
 
     // Calculate callout box dimensions
     const maxTextWidth = Math.max(
-      ...items.slice(0, displayCount).map(i => this.estimateLabelWidth(i.text))
+      ...items.slice(0, displayCount).map(i => this.measureText(i.text))
     );
     const moreText = hiddenCount > 0 ? `+${hiddenCount} more` : null;
-    const moreWidth = moreText ? this.estimateLabelWidth(moreText) : 0;
+    const moreWidth = moreText ? this.measureText(moreText) : 0;
     const boxWidth = Math.max(maxTextWidth, moreWidth) + padding * 2;
     const boxHeight = (displayCount + (moreText ? 1 : 0)) * fontSize * lineHeight + padding * 2;
 
