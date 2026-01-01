@@ -37,13 +37,16 @@ out vec2 v_texCoord;
 void main() {
   v_texCoord = a_texCoord;
 
-  // Transform anchor to clip space
+  // Transform anchor to clip space (homogeneous coordinates)
   vec3 anchorClip = u_matrix * vec3(a_anchor, 1.0);
+
+  // Perspective divide for 2D homogeneous coordinates
+  vec2 anchorNDC = anchorClip.xy / anchorClip.z;
 
   // Convert pixel offset to clip space (2.0 because clip space is -1 to 1)
   vec2 offsetClip = a_offset * vec2(2.0 / u_viewportWidth, -2.0 / u_viewportHeight);
 
-  gl_Position = vec4(anchorClip.xy + offsetClip, 0.0, 1.0);
+  gl_Position = vec4(anchorNDC + offsetClip, 0.0, 1.0);
 }
 `;
 

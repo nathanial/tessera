@@ -43,6 +43,7 @@ export class Geometry {
   readonly indexBuffer?: Buffer;
   readonly vertexCount: number;
   readonly indexCount?: number;
+  readonly indexType?: GLenum;
 
   private _destroyed = false;
 
@@ -73,6 +74,8 @@ export class Geometry {
       this.indexBuffer = new Buffer(gl, "element", options.usage ?? "static");
       this.indexBuffer.setData(options.indices);
       this.indexCount = options.indices.length;
+      // Store the actual index type based on the array type passed in
+      this.indexType = options.indices instanceof Uint32Array ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT;
     }
 
     // Setup VAO
@@ -119,9 +122,8 @@ export class Geometry {
 
     this.bind();
 
-    if (this.indexBuffer && this.indexCount !== undefined) {
-      const indexType = this.indexCount > 65535 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT;
-      this.gl.drawElements(mode, this.indexCount, indexType, 0);
+    if (this.indexBuffer && this.indexCount !== undefined && this.indexType !== undefined) {
+      this.gl.drawElements(mode, this.indexCount, this.indexType, 0);
     } else {
       this.gl.drawArrays(mode, 0, this.vertexCount);
     }
