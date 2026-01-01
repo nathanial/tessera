@@ -15,6 +15,16 @@ export class Camera {
   /** Tile size in CSS pixels (512 for @2x retina tiles) */
   static readonly TILE_SIZE = 512;
 
+  // Inertial zoom animation state
+  private static readonly ZOOM_DECAY = 0.00001; // Exponential decay rate (lower = faster stop)
+  private static readonly ZOOM_VELOCITY_THRESHOLD = 0.0001; // Stop threshold
+
+  private zoomVelocity = 0;
+  private zoomAnchorX = 0;
+  private zoomAnchorY = 0;
+  private lastViewportWidth = 0;
+  private lastViewportHeight = 0;
+
   /** Get the view-projection matrix for rendering */
   getMatrix(viewportWidth: number, viewportHeight: number): Mat3 {
     // At zoom N, the world is TILE_SIZE * 2^N pixels wide
@@ -49,10 +59,15 @@ export class Camera {
     this.centerY -= (dy / viewportHeight) * viewHeight;
   }
 
+  /** Minimum zoom level (prevents zooming out too far) */
+  static readonly MIN_ZOOM = 4;
+  /** Maximum zoom level */
+  static readonly MAX_ZOOM = 19;
+
   /** Zoom at a specific screen point */
   zoomAt(delta: number, screenX: number, screenY: number, viewportWidth: number, viewportHeight: number): void {
     const oldZoom = this.zoom;
-    this.zoom = Math.max(0, Math.min(19, this.zoom + delta));
+    this.zoom = Math.max(Camera.MIN_ZOOM, Math.min(Camera.MAX_ZOOM, this.zoom + delta));
 
     if (this.zoom === oldZoom) return;
 
@@ -101,5 +116,62 @@ export class Camera {
       top: this.centerY - viewHeight / 2,
       bottom: this.centerY + viewHeight / 2,
     };
+  }
+
+  /**
+   * Add velocity from scroll input for inertial zoom.
+   * Velocity accumulates, allowing rapid scrolling to build up momentum.
+   */
+  addZoomVelocity(
+    delta: number,
+    screenX: number,
+    screenY: number,
+    viewportWidth: number,
+    viewportHeight: number
+  ): void {
+    // Accumulate velocity
+    this.zoomVelocity += delta;
+
+    // Update anchor point (where to zoom toward)
+    this.zoomAnchorX = screenX;
+    this.zoomAnchorY = screenY;
+    this.lastViewportWidth = viewportWidth;
+    this.lastViewportHeight = viewportHeight;
+  }
+
+  /**
+   * Update zoom animation. Call this every frame with delta time.
+   * Returns true if still animating (caller should request another frame).
+   */
+  updateZoom(dt: number): boolean {
+    if (Math.abs(this.zoomVelocity) < Camera.ZOOM_VELOCITY_THRESHOLD) {
+      this.zoomVelocity = 0;
+      return false; // Animation complete
+    }
+
+    // Apply zoom with cursor anchoring
+    // Scale by 60 to normalize for ~60fps (velocity feels consistent across frame rates)
+    this.zoomAt(
+      this.zoomVelocity * dt * 60,
+      this.zoomAnchorX,
+      this.zoomAnchorY,
+      this.lastViewportWidth,
+      this.lastViewportHeight
+    );
+
+    // Decay velocity (exponential decay)
+    this.zoomVelocity *= Math.pow(Camera.ZOOM_DECAY, dt);
+
+    return true; // Still animating
+  }
+
+  /** Stop any ongoing zoom animation */
+  stopZoomAnimation(): void {
+    this.zoomVelocity = 0;
+  }
+
+  /** Check if zoom animation is active */
+  isZoomAnimating(): boolean {
+    return Math.abs(this.zoomVelocity) >= Camera.ZOOM_VELOCITY_THRESHOLD;
   }
 }

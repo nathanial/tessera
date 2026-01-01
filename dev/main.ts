@@ -231,6 +231,11 @@ tessera.render = function () {
   const dt = (now - lastTime) / 1000;
   lastTime = now;
 
+  // Update inertial zoom animation
+  if (this.camera.updateZoom(dt)) {
+    this.requestRender(); // Keep animating while zoom has velocity
+  }
+
   // Update rotations, hue offset, and animation time
   for (const shape of shapes) {
     shape.rotation += shape.rotationSpeed * dt;
@@ -407,7 +412,8 @@ canvas.addEventListener("wheel", (e) => {
   const x = (e.clientX - rect.left) * dpr;
   const y = (e.clientY - rect.top) * dpr;
 
-  tessera.camera.zoomAt(delta, x, y, canvas.width, canvas.height);
+  // Use inertial zoom - adds velocity instead of instant zoom
+  tessera.camera.addZoomVelocity(delta, x, y, canvas.width, canvas.height);
   tessera.requestRender();
 });
 
