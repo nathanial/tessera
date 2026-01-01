@@ -1,6 +1,7 @@
 import { Tessera, DrawContext, VERSION, lonLatToTessera, SDFRenderer, createFontAtlas } from "../src/index";
 import earcut from "earcut";
 import { ADSBLayer, getAltitudeColor } from "./adsb";
+import { loadStateBorderPoints, type BorderPoint } from "./borders";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -8,9 +9,14 @@ console.log(`Tessera v${VERSION}`);
 // LABEL CLUSTERING (Spatial Binning)
 // ============================================
 
-// Grid cell dimensions in pixels for label clustering
-const LABEL_CELL_WIDTH = 160;  // Wide cells for horizontal label text
-const LABEL_CELL_HEIGHT = 40;  // Short cells to separate vertical stacking
+// Label size scaling (similar to aircraft)
+const LABEL_FULL_SIZE = 18; // Font size at full zoom
+const LABEL_FULL_SIZE_ZOOM = 8; // Zoom level at which labels are full size
+const LABEL_MIN_SIZE = 12; // Minimum font size when zoomed out
+
+// Grid cell dimensions scale with font size
+const LABEL_CELL_WIDTH_RATIO = 8;  // Cell width = fontSize * this ratio
+const LABEL_CELL_HEIGHT_RATIO = 2;  // Cell height = fontSize * this ratio
 let DEBUG_SHOW_GRID = false;   // Toggle with 'G' key
 
 // Estimated label dimensions for center-based binning
@@ -116,14 +122,18 @@ function clusterLabels(
   labelFontSize: number,
   bounds: { left: number; right: number; top: number; bottom: number },
   fixedGridOffset?: { x: number; y: number }
-): { clusters: LabelCluster[]; gridOffset: { x: number; y: number } } {
+): { clusters: LabelCluster[]; gridOffset: { x: number; y: number }; cellWidth: number; cellHeight: number } {
   const grid = new Map<string, LabelCluster>();
+
+  // Scale cell dimensions with font size
+  const cellWidth = labelFontSize * LABEL_CELL_WIDTH_RATIO;
+  const cellHeight = labelFontSize * LABEL_CELL_HEIGHT_RATIO;
 
   // Calculate current grid offset from world origin
   const origin = worldToScreen(0, 0, matrix, viewportWidth, viewportHeight);
   const currentOffset = {
-    x: ((origin.screenX % LABEL_CELL_WIDTH) + LABEL_CELL_WIDTH) % LABEL_CELL_WIDTH,
-    y: ((origin.screenY % LABEL_CELL_HEIGHT) + LABEL_CELL_HEIGHT) % LABEL_CELL_HEIGHT,
+    x: ((origin.screenX % cellWidth) + cellWidth) % cellWidth,
+    y: ((origin.screenY % cellHeight) + cellHeight) % cellHeight,
   };
 
   // Use fixed offset if provided (for stable clustering during zoom)
@@ -157,8 +167,8 @@ function clusterLabels(
 
     // Use label CENTER for cell assignment (improves border behavior)
     const labelCenterX = screenX + halfLabelWidth;
-    const cellX = Math.floor((labelCenterX - gridOffsetX) / LABEL_CELL_WIDTH);
-    const cellY = Math.floor((screenY - gridOffsetY) / LABEL_CELL_HEIGHT);
+    const cellX = Math.floor((labelCenterX - gridOffsetX) / cellWidth);
+    const cellY = Math.floor((screenY - gridOffsetY) / cellHeight);
     const key = `${cellX}_${cellY}`;
 
     let cluster = grid.get(key);
@@ -170,7 +180,7 @@ function clusterLabels(
     cluster.aircraft.push({ ...ac, x: renderLabelX - labelOffsetWorld });
   }
 
-  return { clusters: Array.from(grid.values()), gridOffset: currentOffset };
+  return { clusters: Array.from(grid.values()), gridOffset: currentOffset, cellWidth, cellHeight };
 }
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -191,9 +201,9 @@ fontAtlas.ready.then(() => {
   console.log("Font atlas loaded for aircraft labels");
 });
 
-// Text styling for aircraft labels
+// Text styling for aircraft labels (fontSize will be scaled dynamically)
 const labelStyle = {
-  fontSize: 18,
+  fontSize: LABEL_FULL_SIZE,
   color: [1, 1, 1, 1] as [number, number, number, number],
   haloColor: [0, 0, 0, 0.8] as [number, number, number, number],
   haloWidth: 2,
@@ -201,25 +211,14 @@ const labelStyle = {
 };
 
 // ============================================
-// GRID CONFIGURATION
+// SHAPE CONFIGURATION
 // ============================================
-
-// Grid layout centered on the US
-// 317 x 316 = 100,172 shapes
-const usCenter = lonLatToTessera(-98, 39); // Central US (Kansas)
-const gridWidth = 317 * 0.00025;
-const gridHeight = 316 * 0.00025;
-const GRID = {
-  startX: usCenter.x - gridWidth / 2,
-  startY: usCenter.y - gridHeight / 2,
-  cellWidth: 0.00025,
-  cellHeight: 0.00025,
-  cols: 317,
-  rows: 316,
-};
 
 // Shape size
 const SHAPE_SIZE = 0.00008;
+
+// Spacing between shapes along borders (in Tessera world units)
+const BORDER_SPACING = 0.0002;
 
 // ============================================
 // SHAPE DATA
@@ -227,17 +226,20 @@ const SHAPE_SIZE = 0.00008;
 
 type ShapeType = "circle" | "square" | "triangle" | "diamond" | "pentagon" | "hexagon" | "octagon" | "star";
 
-interface GridShape {
-  row: number;
-  col: number;
+interface BorderShape {
+  baseX: number;      // Border point X coordinate
+  baseY: number;      // Border point Y coordinate
+  index: number;      // Index for wave animation phase
   shape: ShapeType;
-  baseHue: number; // 0-1, position-based hue
+  baseHue: number;    // 0-1, position-based hue
   size: number;
   rotation: number;
   rotationSpeed: number;
 }
 
-const shapes: GridShape[] = [];
+// Shapes array - populated async on load
+let shapes: BorderShape[] = [];
+let shapesLoaded = false;
 
 // HSL to RGB conversion
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
@@ -267,27 +269,32 @@ const WAVE_SPEED = 2.0; // Wave animation speed
 
 const shapeTypes: ShapeType[] = ["circle", "square", "triangle", "diamond", "pentagon", "hexagon", "octagon", "star"];
 
-// Generate grid of shapes
-for (let row = 0; row < GRID.rows; row++) {
-  for (let col = 0; col < GRID.cols; col++) {
+// Load border shapes asynchronously
+async function loadBorderShapes(): Promise<void> {
+  const borderPoints = await loadStateBorderPoints(BORDER_SPACING);
+
+  for (let i = 0; i < borderPoints.length; i++) {
+    const point = borderPoints[i]!;
+
     // Alternate shape types in a pattern
-    const shapeIndex = (row + col) % shapeTypes.length;
+    const shapeIndex = i % shapeTypes.length;
     const shapeType = shapeTypes[shapeIndex]!;
 
-    // Base hue based on diagonal position (creates rainbow sweep)
-    const baseHue = (row + col) / (GRID.rows + GRID.cols);
+    // Base hue based on position along border (creates rainbow sweep)
+    const baseHue = i / borderPoints.length;
 
     // Vary size slightly
-    const sizeVariation = 0.7 + ((row * col) % 5) * 0.1;
+    const sizeVariation = 0.7 + ((i * 7) % 5) * 0.1;
 
     // Vary rotation speed - some fast, some slow, some negative
-    const speedVariation = ((row * 7 + col * 13) % 10) / 10; // 0 to 0.9
-    const direction = ((row + col) % 2 === 0) ? 1 : -1;
+    const speedVariation = ((i * 13) % 10) / 10; // 0 to 0.9
+    const direction = (i % 2 === 0) ? 1 : -1;
     const rotationSpeed = direction * (0.5 + speedVariation * 1.5); // 0.5 to 2.0 rad/s
 
     shapes.push({
-      row,
-      col,
+      baseX: point.x,
+      baseY: point.y,
+      index: i,
       shape: shapeType,
       baseHue,
       size: SHAPE_SIZE * sizeVariation,
@@ -295,12 +302,16 @@ for (let row = 0; row < GRID.rows; row++) {
       rotationSpeed,
     });
   }
+
+  console.log(`Created ${shapes.length} shapes along US state borders`);
+
+  // Sort shapes by type for optimal batching (8 batches instead of 100k)
+  shapes.sort((a, b) => shapeTypes.indexOf(a.shape) - shapeTypes.indexOf(b.shape));
+  shapesLoaded = true;
 }
 
-console.log(`Created ${shapes.length} shapes in a ${GRID.cols}x${GRID.rows} grid`);
-
-// Sort shapes by type for optimal batching (8 batches instead of 100k)
-shapes.sort((a, b) => shapeTypes.indexOf(a.shape) - shapeTypes.indexOf(b.shape));
+// Start loading border shapes
+loadBorderShapes();
 
 // ============================================
 // PRE-COMPUTED SHAPE TEMPLATES
@@ -375,7 +386,9 @@ const aircraftVertices = [
 ];
 const aircraftIndices = earcut(aircraftVertices);
 
-const AIRCRAFT_SCREEN_SIZE = 15; // Fixed size in pixels
+const AIRCRAFT_SCREEN_SIZE = 15; // Size in pixels at full zoom
+const AIRCRAFT_FULL_SIZE_ZOOM = 8; // Zoom level at which aircraft are full size
+const AIRCRAFT_MIN_SIZE = 3; // Minimum size in pixels when zoomed out
 
 // Initialize ADSB layer with simulated aircraft
 const adsbLayer = new ADSBLayer(10000); // 10k simulated aircraft
@@ -384,10 +397,11 @@ const adsbLayer = new ADSBLayer(10000); // 10k simulated aircraft
 // MAIN RENDER LOOP
 // ============================================
 
-// Start centered on the US (same as grid)
+// Start centered on the US
+const usCenter = lonLatToTessera(-98, 39); // Central US (Kansas)
 tessera.camera.centerX = usCenter.x;
 tessera.camera.centerY = usCenter.y;
-tessera.camera.zoom = 8; // Zoomed in to see grid shapes
+tessera.camera.zoom = 8; // Zoomed in to see border shapes
 
 let lastTime = performance.now();
 
@@ -431,20 +445,16 @@ tessera.render = function () {
   // ============================================
   draw.begin(matrix, w, h);
 
-  // Draw all shapes in grid using pre-computed templates
+  // Draw all shapes along state borders using pre-computed templates
   let culledCount = 0;
   for (const shape of shapes) {
-    // Base grid position
-    const baseCx = GRID.startX + shape.col * GRID.cellWidth + GRID.cellWidth / 2;
-    const baseCy = GRID.startY + shape.row * GRID.cellHeight + GRID.cellHeight / 2;
-
-    // Wave animation: ripple effect based on distance from center
-    const wavePhase = (shape.row + shape.col) * 0.3 + animTime;
+    // Wave animation: ripple effect along border
+    const wavePhase = shape.index * 0.3 + animTime;
     const waveX = Math.sin(wavePhase) * WAVE_AMPLITUDE;
     const waveY = Math.cos(wavePhase * 1.3) * WAVE_AMPLITUDE;
 
-    const cx = baseCx + waveX;
-    const cy = baseCy + waveY;
+    const cx = shape.baseX + waveX;
+    const cy = shape.baseY + waveY;
     const r = shape.size; // Bounding radius
 
     // Y culling (no wrapping for vertical)
@@ -482,10 +492,18 @@ tessera.render = function () {
   // ============================================
   // DRAW AIRCRAFT
   // ============================================
-  // Fixed screen size converted to world coordinates
+  // Screen size scales down when zoomed out below threshold
   const viewWidth = bounds.right - bounds.left;
   const pixelsPerWorldUnit = w / viewWidth;
-  const aircraftSize = AIRCRAFT_SCREEN_SIZE / pixelsPerWorldUnit;
+
+  // Scale aircraft size based on zoom level
+  let aircraftScreenSize = AIRCRAFT_SCREEN_SIZE;
+  if (this.camera.zoom < AIRCRAFT_FULL_SIZE_ZOOM) {
+    // Linear interpolation from MIN_SIZE at zoom 4 to FULL_SIZE at zoom 7
+    const t = (this.camera.zoom - 4) / (AIRCRAFT_FULL_SIZE_ZOOM - 4);
+    aircraftScreenSize = AIRCRAFT_MIN_SIZE + (AIRCRAFT_SCREEN_SIZE - AIRCRAFT_MIN_SIZE) * Math.max(0, t);
+  }
+  const aircraftSize = aircraftScreenSize / pixelsPerWorldUnit;
 
   let aircraftDrawn = 0;
   for (const ac of adsbLayer.aircraft) {
@@ -519,98 +537,113 @@ tessera.render = function () {
   // ============================================
   sdfRenderer.clearText();
 
-  // Compute label offset in world units (offset to the right of aircraft)
-  const labelOffsetWorld = aircraftSize * 1.2;
+  // Hide labels completely below zoom 5.5
+  const showLabels = this.camera.zoom >= 5.5;
 
-  // During zoom animation, use cached grid offset for stable grouping
-  // Labels still move (recalculated each frame) but groupings stay consistent
-  const isZooming = this.camera.isZoomAnimating();
-  const { clusters, gridOffset } = clusterLabels(
-    adsbLayer.aircraft,
-    matrix,
-    w,
-    h,
-    labelOffsetWorld,
-    labelStyle.fontSize,
-    bounds,
-    isZooming ? cachedGridOffset ?? undefined : undefined
-  );
-
-  // Cache grid offset when not zooming (for next zoom animation)
-  if (!isZooming) {
-    cachedGridOffset = gridOffset;
+  // Scale label font size based on zoom level
+  let labelFontSize = LABEL_FULL_SIZE;
+  if (this.camera.zoom < LABEL_FULL_SIZE_ZOOM) {
+    const t = (this.camera.zoom - 4) / (LABEL_FULL_SIZE_ZOOM - 4);
+    labelFontSize = LABEL_MIN_SIZE + (LABEL_FULL_SIZE - LABEL_MIN_SIZE) * Math.max(0, t);
   }
 
-  // Debug: draw the spatial binning grid
-  if (DEBUG_SHOW_GRID) {
-    draw.begin(matrix, w, h);
-    draw.strokeStyle = [1, 0, 1, 0.5]; // Magenta, semi-transparent
-    draw.lineWidth = 1;
+  if (showLabels) {
+    // Compute label offset in world units (offset to the right of aircraft)
+    const labelOffsetWorld = aircraftSize * 1.2;
 
-    // Use the same grid offset as clustering
-    const effectiveOffset = isZooming && cachedGridOffset ? cachedGridOffset : gridOffset;
-
-    // Draw vertical lines
-    for (let screenX = effectiveOffset.x; screenX <= w; screenX += LABEL_CELL_WIDTH) {
-      const top = screenToWorld(screenX, 0, matrix, w, h);
-      const bottom = screenToWorld(screenX, h, matrix, w, h);
-      draw.beginPath();
-      draw.moveTo(top.worldX, top.worldY);
-      draw.lineTo(bottom.worldX, bottom.worldY);
-      draw.stroke();
-    }
-    // Draw lines going left from offset
-    for (let screenX = effectiveOffset.x - LABEL_CELL_WIDTH; screenX >= 0; screenX -= LABEL_CELL_WIDTH) {
-      const top = screenToWorld(screenX, 0, matrix, w, h);
-      const bottom = screenToWorld(screenX, h, matrix, w, h);
-      draw.beginPath();
-      draw.moveTo(top.worldX, top.worldY);
-      draw.lineTo(bottom.worldX, bottom.worldY);
-      draw.stroke();
-    }
-
-    // Draw horizontal lines
-    for (let screenY = effectiveOffset.y; screenY <= h; screenY += LABEL_CELL_HEIGHT) {
-      const left = screenToWorld(0, screenY, matrix, w, h);
-      const right = screenToWorld(w, screenY, matrix, w, h);
-      draw.beginPath();
-      draw.moveTo(left.worldX, left.worldY);
-      draw.lineTo(right.worldX, right.worldY);
-      draw.stroke();
-    }
-    // Draw lines going up from offset
-    for (let screenY = effectiveOffset.y - LABEL_CELL_HEIGHT; screenY >= 0; screenY -= LABEL_CELL_HEIGHT) {
-      const left = screenToWorld(0, screenY, matrix, w, h);
-      const right = screenToWorld(w, screenY, matrix, w, h);
-      draw.beginPath();
-      draw.moveTo(left.worldX, left.worldY);
-      draw.lineTo(right.worldX, right.worldY);
-      draw.stroke();
-    }
-
-    draw.end();
-  }
-
-  for (const cluster of clusters) {
-    const representative = cluster.aircraft[0]!;
-    const count = cluster.aircraft.length;
-
-    // Format label: single aircraft shows full label, clusters show "+N"
-    let label: string;
-    if (count === 1) {
-      label = representative.callsign || representative.icao24;
-    } else {
-      const name = representative.callsign || representative.icao24;
-      label = `${name} +${count - 1}`;
-    }
-
-    // Position label next to representative aircraft
-    sdfRenderer.addText(
-      label,
-      representative.x + labelOffsetWorld,
-      representative.y,
-      labelStyle
+    // During zoom animation, use cached grid offset for stable grouping
+    // Labels still move (recalculated each frame) but groupings stay consistent
+    const isZooming = this.camera.isZoomAnimating();
+    const { clusters, gridOffset, cellWidth, cellHeight } = clusterLabels(
+      adsbLayer.aircraft,
+      matrix,
+      w,
+      h,
+      labelOffsetWorld,
+      labelFontSize,
+      bounds,
+      isZooming ? cachedGridOffset ?? undefined : undefined
     );
+
+    // Cache grid offset when not zooming (for next zoom animation)
+    if (!isZooming) {
+      cachedGridOffset = gridOffset;
+    }
+
+    // Debug: draw the spatial binning grid
+    if (DEBUG_SHOW_GRID) {
+      draw.begin(matrix, w, h);
+      draw.strokeStyle = [1, 0, 1, 0.5]; // Magenta, semi-transparent
+      draw.lineWidth = 1;
+
+      // Use the same grid offset as clustering
+      const effectiveOffset = isZooming && cachedGridOffset ? cachedGridOffset : gridOffset;
+
+      // Draw vertical lines
+      for (let screenX = effectiveOffset.x; screenX <= w; screenX += cellWidth) {
+        const top = screenToWorld(screenX, 0, matrix, w, h);
+        const bottom = screenToWorld(screenX, h, matrix, w, h);
+        draw.beginPath();
+        draw.moveTo(top.worldX, top.worldY);
+        draw.lineTo(bottom.worldX, bottom.worldY);
+        draw.stroke();
+      }
+      // Draw lines going left from offset
+      for (let screenX = effectiveOffset.x - cellWidth; screenX >= 0; screenX -= cellWidth) {
+        const top = screenToWorld(screenX, 0, matrix, w, h);
+        const bottom = screenToWorld(screenX, h, matrix, w, h);
+        draw.beginPath();
+        draw.moveTo(top.worldX, top.worldY);
+        draw.lineTo(bottom.worldX, bottom.worldY);
+        draw.stroke();
+      }
+
+      // Draw horizontal lines
+      for (let screenY = effectiveOffset.y; screenY <= h; screenY += cellHeight) {
+        const left = screenToWorld(0, screenY, matrix, w, h);
+        const right = screenToWorld(w, screenY, matrix, w, h);
+        draw.beginPath();
+        draw.moveTo(left.worldX, left.worldY);
+        draw.lineTo(right.worldX, right.worldY);
+        draw.stroke();
+      }
+      // Draw lines going up from offset
+      for (let screenY = effectiveOffset.y - cellHeight; screenY >= 0; screenY -= cellHeight) {
+        const left = screenToWorld(0, screenY, matrix, w, h);
+        const right = screenToWorld(w, screenY, matrix, w, h);
+        draw.beginPath();
+        draw.moveTo(left.worldX, left.worldY);
+        draw.lineTo(right.worldX, right.worldY);
+        draw.stroke();
+      }
+
+      draw.end();
+    }
+
+    // Create scaled label style for this frame
+    const scaledLabelStyle = { ...labelStyle, fontSize: labelFontSize };
+
+    for (const cluster of clusters) {
+      const representative = cluster.aircraft[0]!;
+      const count = cluster.aircraft.length;
+
+      // Format label: single aircraft shows full label, clusters show "+N"
+      let label: string;
+      if (count === 1) {
+        label = representative.callsign || representative.icao24;
+      } else {
+        const name = representative.callsign || representative.icao24;
+        label = `${name} +${count - 1}`;
+      }
+
+      // Position label next to representative aircraft
+      sdfRenderer.addText(
+        label,
+        representative.x + labelOffsetWorld,
+        representative.y,
+        scaledLabelStyle
+      );
+    }
   }
 
   sdfRenderer.render(matrix, w, h);
@@ -744,4 +777,4 @@ window.addEventListener("keydown", (e) => {
 });
 
 console.log("Controls: drag to pan, scroll to zoom, G to toggle grid");
-console.log(`Grid: ${GRID.cols}x${GRID.rows} = ${shapes.length} shapes`);
+console.log("Shapes loaded along US state borders (count will appear when loaded)");
