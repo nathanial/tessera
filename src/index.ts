@@ -12,5 +12,31 @@ export { Geometry, type AttributeLayout, type GeometryOptions } from "./Geometry
 export * as mat3 from "./math/mat3";
 
 // Phase 2: Geometry Pipeline
-export { FeatureRenderer, type Color, type FeatureStyle } from "./FeatureRenderer";
+export { FeatureRenderer, type Color, type FeatureStyle, type BlendMode } from "./FeatureRenderer";
 export * from "./geometry/index";
+
+// Phase 3: Style System
+export { setBlendMode, computeEffectiveColor } from "./style/index";
+export type { EnhancedFeatureStyle } from "./style/index";
+
+// Phase 3: Batch Rendering
+export { BatchRenderer, BatchGroup } from "./batch/index";
+export { createBatchKey, hashColor, batchKeyToString } from "./batch/index";
+export type { BatchKey, BatchableFeature } from "./batch/index";
+
+// Phase 3: Instanced Rendering
+export { InstancedPointRenderer, createShapeGeometry } from "./instanced/index";
+export type { PointShape, PointInstance, ShapeGeometry } from "./instanced/index";
+
+// Phase 3: SDF Text & Icons
+export { SDFRenderer, TextLayout } from "./sdf/index";
+export type {
+  FontAtlasMetadata,
+  IconAtlasMetadata,
+  GlyphMetrics,
+  IconMetrics,
+  TextStyle,
+  IconStyle,
+  TextMeasurement,
+  LayoutOptions,
+} from "./sdf/index";

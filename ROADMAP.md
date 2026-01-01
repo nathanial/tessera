@@ -17,13 +17,13 @@
 - [x] **Cap Styles** - Butt, square, and round caps
 - [x] **Screen-Space Line Widths** - Pixel-perfect widths at any zoom
 
-## Phase 3: Rendering Features
+## Phase 3: Rendering Features ✅
 
-- [ ] **Batch Renderer** - Group draw calls by style/shader
-- [ ] **Style System** - Fill, stroke, opacity, z-index
-- [ ] **Instanced Rendering** - Efficient point/marker rendering
-- [ ] **SDF Text** - Signed Distance Field text rendering
-- [ ] **SDF Icons** - Crisp icons at any scale
+- [x] **Batch Renderer** - Group draw calls by style/shader
+- [x] **Style System** - Fill, stroke, opacity, z-index, blend modes
+- [x] **Instanced Rendering** - Efficient point/marker rendering (circle, square, triangle, diamond)
+- [x] **SDF Text** - Signed Distance Field text rendering
+- [x] **SDF Icons** - Crisp icons at any scale
 
 ## Phase 4: Coordinate Systems
 

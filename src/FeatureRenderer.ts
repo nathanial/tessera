@@ -2,6 +2,7 @@
  * GeoJSON Feature Renderer
  *
  * Renders GeoJSON geometries over the tile map with fill and stroke styling.
+ * Supports z-ordering, opacity, and blend modes (Phase 3).
  */
 
 import { Geometry } from "./Geometry";
@@ -9,6 +10,10 @@ import { createProgram } from "./shaders/compile";
 import { fillVertexShader, fillFragmentShader } from "./shaders/fill";
 import { strokeVertexShader, strokeFragmentShader } from "./shaders/stroke";
 import { tessellateGeoJSON, extrudeGeoJSON, type CapStyle } from "./geometry/index";
+import { setBlendMode, computeEffectiveColor, type BlendMode } from "./style/index";
+
+// Re-export BlendMode for convenience
+export type { BlendMode } from "./style/index";
 import type { Mat3 } from "./math/mat3";
 
 /** RGBA color as [r, g, b, a] with values 0-1 */
@@ -24,6 +29,16 @@ export interface FeatureStyle {
   strokeWidth?: number;
   /** Cap style for line ends (default: round) */
   strokeCap?: CapStyle;
+  /** Z-index for depth ordering (default: 0, higher = on top) */
+  zIndex?: number;
+  /** Overall opacity multiplier 0-1 (default: 1) */
+  opacity?: number;
+  /** Fill-specific opacity 0-1 (default: 1) */
+  fillOpacity?: number;
+  /** Stroke-specific opacity 0-1 (default: 1) */
+  strokeOpacity?: number;
+  /** Blend mode for compositing (default: "normal") */
+  blendMode?: BlendMode;
 }
 
 /** GeoJSON geometry types we support */
@@ -53,6 +68,11 @@ const DEFAULT_STYLE: Required<FeatureStyle> = {
   strokeColor: [0.1, 0.2, 0.4, 1.0],
   strokeWidth: 2,
   strokeCap: "round",
+  zIndex: 0,
+  opacity: 1,
+  fillOpacity: 1,
+  strokeOpacity: 1,
+  blendMode: "normal",
 };
 
 export class FeatureRenderer {
@@ -235,6 +255,9 @@ export class FeatureRenderer {
   /**
    * Render all features.
    *
+   * Features are sorted by z-index, with fills rendered before strokes
+   * at each z-level. Supports blend modes and opacity.
+   *
    * @param matrix - View-projection matrix from Camera.getMatrix()
    * @param viewportWidth - Viewport width in pixels
    * @param viewportHeight - Viewport height in pixels
@@ -244,35 +267,62 @@ export class FeatureRenderer {
 
     const gl = this.gl;
 
+    // Sort features by z-index for proper layering
+    const sortedFeatures = [...this.features].sort(
+      (a, b) => a.style.zIndex - b.style.zIndex
+    );
+
     // Enable blending for transparency
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    // Render fills first (back to front)
-    gl.useProgram(this.fillProgram);
-    gl.uniformMatrix3fv(this.fillUniforms.matrix, false, matrix);
+    let currentBlendMode: BlendMode | null = null;
+    let currentProgram: "fill" | "stroke" | null = null;
 
-    for (const feature of this.features) {
-      if (!feature.fillGeometry) continue;
+    // Render in z-order: for each feature, render fill then stroke
+    for (const feature of sortedFeatures) {
+      const { style } = feature;
 
-      gl.uniform4fv(this.fillUniforms.color, feature.style.fillColor);
-      feature.fillGeometry.draw();
-    }
+      // Update blend mode if changed
+      if (style.blendMode !== currentBlendMode) {
+        currentBlendMode = style.blendMode;
+        setBlendMode(gl, currentBlendMode);
+      }
 
-    // Render strokes on top
-    gl.useProgram(this.strokeProgram);
-    gl.uniformMatrix3fv(this.strokeUniforms.matrix, false, matrix);
-    gl.uniform2f(this.strokeUniforms.viewport, viewportWidth, viewportHeight);
+      // Render fill if present
+      if (feature.fillGeometry) {
+        if (currentProgram !== "fill") {
+          gl.useProgram(this.fillProgram);
+          gl.uniformMatrix3fv(this.fillUniforms.matrix, false, matrix);
+          currentProgram = "fill";
+        }
 
-    for (const feature of this.features) {
-      if (!feature.strokeGeometry) continue;
+        const effectiveColor = computeEffectiveColor(
+          style.fillColor,
+          style.opacity,
+          style.fillOpacity
+        );
+        gl.uniform4fv(this.fillUniforms.color, effectiveColor);
+        feature.fillGeometry.draw();
+      }
 
-      gl.uniform4fv(this.strokeUniforms.color, feature.style.strokeColor);
-      gl.uniform1f(
-        this.strokeUniforms.halfWidth,
-        feature.style.strokeWidth / 2
-      );
-      feature.strokeGeometry.draw();
+      // Render stroke if present
+      if (feature.strokeGeometry) {
+        if (currentProgram !== "stroke") {
+          gl.useProgram(this.strokeProgram);
+          gl.uniformMatrix3fv(this.strokeUniforms.matrix, false, matrix);
+          gl.uniform2f(this.strokeUniforms.viewport, viewportWidth, viewportHeight);
+          currentProgram = "stroke";
+        }
+
+        const effectiveColor = computeEffectiveColor(
+          style.strokeColor,
+          style.opacity,
+          style.strokeOpacity
+        );
+        gl.uniform4fv(this.strokeUniforms.color, effectiveColor);
+        gl.uniform1f(this.strokeUniforms.halfWidth, style.strokeWidth / 2);
+        feature.strokeGeometry.draw();
+      }
     }
 
     gl.disable(gl.BLEND);
