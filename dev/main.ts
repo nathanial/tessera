@@ -45,8 +45,8 @@ function worldToScreen(
   viewportHeight: number
 ): { screenX: number; screenY: number } {
   // Apply 3x3 matrix: clipX = matrix[0]*x + matrix[3]*y + matrix[6]
-  const clipX = matrix[0] * worldX + matrix[3] * worldY + matrix[6];
-  const clipY = matrix[1] * worldX + matrix[4] * worldY + matrix[7];
+  const clipX = matrix[0]! * worldX + matrix[3]! * worldY + matrix[6]!;
+  const clipY = matrix[1]! * worldX + matrix[4]! * worldY + matrix[7]!;
 
   // Clip space (-1,1) to screen pixels
   const screenX = (clipX + 1) * 0.5 * viewportWidth;
@@ -70,9 +70,9 @@ function screenToWorld(
   // Invert 2x2 part of matrix (ignoring translation for now)
   // matrix is [a, b, 0, c, d, 0, tx, ty, 1] in column-major
   // For our camera matrix: a=scale, b=0, c=0, d=-scale, tx, ty
-  const a = matrix[0], b = matrix[3];
-  const c = matrix[1], d = matrix[4];
-  const tx = matrix[6], ty = matrix[7];
+  const a = matrix[0]!, b = matrix[3]!;
+  const c = matrix[1]!, d = matrix[4]!;
+  const tx = matrix[6]!, ty = matrix[7]!;
 
   // Solve: clipX = a*x + b*y + tx, clipY = c*x + d*y + ty
   const det = a * d - b * c;

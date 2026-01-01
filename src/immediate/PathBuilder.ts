@@ -7,8 +7,15 @@
 
 import earcut from "earcut";
 import type { LineCap } from "./DrawState";
+import {
+  normalize,
+  perpendicular,
+  computeMiter,
+  type Vec2,
+} from "../math/vec2";
+import { addRoundCap, addSquareCap } from "../geometry/caps";
 
-export type Coord = [number, number];
+export type Coord = Vec2;
 
 interface SubPath {
   points: Coord[];
@@ -256,8 +263,8 @@ export class PathBuilder {
       const p2 = coords[(i + 1) % coords.length]!;
       const dx = p2[0] - p1[0];
       const dy = p2[1] - p1[1];
-      directions.push(this.normalize([dx, dy]));
-      normals.push(this.perpendicular(dx, dy));
+      directions.push(normalize([dx, dy]));
+      normals.push(perpendicular(dx, dy));
     }
 
     // Process each vertex
@@ -270,7 +277,7 @@ export class PathBuilder {
         // All vertices are interior for closed paths
         const prevIdx = (i - 1 + normals.length) % normals.length;
         const currIdx = i % normals.length;
-        [miterX, miterY, miterScale] = this.computeMiter(
+        [miterX, miterY, miterScale] = computeMiter(
           normals[prevIdx]!,
           normals[currIdx]!,
           miterLimit
@@ -285,7 +292,7 @@ export class PathBuilder {
         miterScale = 1;
       } else {
         // Interior vertex with miter join
-        [miterX, miterY, miterScale] = this.computeMiter(
+        [miterX, miterY, miterScale] = computeMiter(
           normals[i - 1]!,
           normals[i]!,
           miterLimit
@@ -314,7 +321,7 @@ export class PathBuilder {
 
       if (cap === "round") {
         // Start cap
-        nextIndex = this.addRoundCap(
+        nextIndex = addRoundCap(
           vertices, indices,
           coords[0]!,
           normals[0]!,
@@ -322,7 +329,7 @@ export class PathBuilder {
           nextIndex
         );
         // End cap
-        this.addRoundCap(
+        addRoundCap(
           vertices, indices,
           coords[coords.length - 1]!,
           normals[normals.length - 1]!,
@@ -331,7 +338,7 @@ export class PathBuilder {
         );
       } else if (cap === "square") {
         // Start cap
-        nextIndex = this.addSquareCap(
+        nextIndex = addSquareCap(
           vertices, indices,
           coords[0]!,
           normals[0]!,
@@ -340,7 +347,7 @@ export class PathBuilder {
           nextIndex
         );
         // End cap
-        this.addSquareCap(
+        addSquareCap(
           vertices, indices,
           coords[coords.length - 1]!,
           normals[normals.length - 1]!,
@@ -352,100 +359,5 @@ export class PathBuilder {
     }
 
     return { vertices, indices };
-  }
-
-  private normalize(v: Coord): Coord {
-    const len = Math.sqrt(v[0] * v[0] + v[1] * v[1]);
-    if (len > 0) {
-      return [v[0] / len, v[1] / len];
-    }
-    return [0, 0];
-  }
-
-  private perpendicular(dx: number, dy: number): Coord {
-    return this.normalize([-dy, dx]);
-  }
-
-  private computeMiter(
-    n1: Coord,
-    n2: Coord,
-    miterLimit: number
-  ): [number, number, number] {
-    let mx = n1[0] + n2[0];
-    let my = n1[1] + n2[1];
-    const len = Math.sqrt(mx * mx + my * my);
-
-    if (len < 0.0001) {
-      return [n1[0], n1[1], 1];
-    }
-
-    mx /= len;
-    my /= len;
-
-    const dot = mx * n1[0] + my * n1[1];
-    let scale = Math.abs(dot) > 0.0001 ? 1 / dot : 1;
-    scale = Math.min(scale, miterLimit);
-
-    return [mx, my, scale];
-  }
-
-  private addRoundCap(
-    vertices: number[],
-    indices: number[],
-    point: Coord,
-    normal: Coord,
-    isStart: boolean,
-    baseIndex: number
-  ): number {
-    const segments = 8;
-    const centerIndex = baseIndex;
-    const startAngle = Math.atan2(normal[1], normal[0]);
-
-    // Center vertex
-    vertices.push(point[0], point[1], 0, 0, 0);
-
-    // Arc vertices
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      const angle = startAngle + (isStart ? Math.PI : 0) + t * Math.PI * (isStart ? 1 : -1);
-      const nx = Math.cos(angle);
-      const ny = Math.sin(angle);
-      vertices.push(point[0], point[1], nx, ny, 1);
-    }
-
-    // Fan triangles
-    for (let i = 0; i < segments; i++) {
-      indices.push(centerIndex, centerIndex + 1 + i, centerIndex + 2 + i);
-    }
-
-    return baseIndex + 2 + segments;
-  }
-
-  private addSquareCap(
-    vertices: number[],
-    indices: number[],
-    point: Coord,
-    normal: Coord,
-    direction: Coord,
-    isStart: boolean,
-    baseIndex: number
-  ): number {
-    const sign = isStart ? -1 : 1;
-    const extX = direction[0] * sign;
-    const extY = direction[1] * sign;
-
-    vertices.push(
-      point[0], point[1], normal[0], normal[1], 1,
-      point[0], point[1], normal[0], normal[1], -1,
-      point[0], point[1], extX + normal[0], extY + normal[1], 1,
-      point[0], point[1], extX + normal[0], extY + normal[1], -1
-    );
-
-    indices.push(
-      baseIndex, baseIndex + 1, baseIndex + 2,
-      baseIndex + 1, baseIndex + 3, baseIndex + 2
-    );
-
-    return baseIndex + 4;
   }
 }

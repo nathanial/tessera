@@ -67,13 +67,13 @@ describe("Camera", () => {
 
     it("clamps zoom to valid range", () => {
       const cam = new Camera();
-      cam.zoom = 0;
+      cam.zoom = Camera.MIN_ZOOM;
       cam.zoomAt(-5, 400, 300, 800, 600);
-      expect(cam.zoom).toBe(0);
+      expect(cam.zoom).toBe(Camera.MIN_ZOOM);
 
-      cam.zoom = 19;
+      cam.zoom = Camera.MAX_ZOOM;
       cam.zoomAt(5, 400, 300, 800, 600);
-      expect(cam.zoom).toBe(19);
+      expect(cam.zoom).toBe(Camera.MAX_ZOOM);
     });
   });
 });

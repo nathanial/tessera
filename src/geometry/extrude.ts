@@ -2,131 +2,12 @@
  * Polyline extrusion to triangle ribbon
  */
 
-import type { Coord, ExtrudedLine, ExtrudeOptions, CapStyle } from "./types";
+import type { Coord, ExtrudedLine, ExtrudeOptions } from "./types";
+import { normalize, perpendicular, computeMiter, type Vec2 } from "../math/vec2";
+import { addRoundCap, addSquareCap } from "./caps";
 
 // Vertex stride: x, y, nx, ny, side
 const STRIDE = 5;
-
-/**
- * Normalize a 2D vector in-place and return it.
- */
-function normalize(v: [number, number]): [number, number] {
-  const len = Math.sqrt(v[0] * v[0] + v[1] * v[1]);
-  if (len > 0) {
-    v[0] /= len;
-    v[1] /= len;
-  }
-  return v;
-}
-
-/**
- * Compute perpendicular normal to a segment (90 degrees CCW).
- */
-function perpendicular(dx: number, dy: number): [number, number] {
-  return normalize([-dy, dx]);
-}
-
-/**
- * Compute miter direction and scale for a corner.
- * Returns [miterX, miterY, miterScale].
- */
-function computeMiter(
-  n1: [number, number],
-  n2: [number, number],
-  miterLimit: number
-): [number, number, number] {
-  // Miter direction is the average of the two normals
-  let mx = n1[0] + n2[0];
-  let my = n1[1] + n2[1];
-  const len = Math.sqrt(mx * mx + my * my);
-
-  if (len < 0.0001) {
-    // Parallel lines (180-degree turn), use n1
-    return [n1[0], n1[1], 1];
-  }
-
-  mx /= len;
-  my /= len;
-
-  // Miter scale = 1 / dot(miter, normal)
-  const dot = mx * n1[0] + my * n1[1];
-  let scale = Math.abs(dot) > 0.0001 ? 1 / dot : 1;
-
-  // Apply miter limit
-  scale = Math.min(scale, miterLimit);
-
-  return [mx, my, scale];
-}
-
-/**
- * Add vertices for a round cap.
- */
-function addRoundCap(
-  vertices: number[],
-  indices: number[],
-  point: Coord,
-  normal: [number, number],
-  isStart: boolean,
-  baseIndex: number
-): number {
-  const segments = 8;
-  const centerIndex = baseIndex;
-  const startAngle = Math.atan2(normal[1], normal[0]);
-
-  // Center vertex (no extrusion)
-  vertices.push(point[0], point[1], 0, 0, 0);
-
-  // Arc vertices
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const angle = startAngle + (isStart ? Math.PI : 0) + t * Math.PI * (isStart ? 1 : -1);
-    const nx = Math.cos(angle);
-    const ny = Math.sin(angle);
-    vertices.push(point[0], point[1], nx, ny, 1);
-  }
-
-  // Fan triangles
-  for (let i = 0; i < segments; i++) {
-    indices.push(centerIndex, centerIndex + 1 + i, centerIndex + 2 + i);
-  }
-
-  return baseIndex + 2 + segments;
-}
-
-/**
- * Add vertices for a square cap.
- */
-function addSquareCap(
-  vertices: number[],
-  indices: number[],
-  point: Coord,
-  normal: [number, number],
-  direction: [number, number],
-  isStart: boolean,
-  baseIndex: number
-): number {
-  // Extend in the line direction
-  const sign = isStart ? -1 : 1;
-  const extX = direction[0] * sign;
-  const extY = direction[1] * sign;
-
-  // Add four vertices for the square extension
-  // Two at the current point (connected to line), two extended
-  vertices.push(
-    point[0], point[1], normal[0], normal[1], 1,  // left at point
-    point[0], point[1], normal[0], normal[1], -1, // right at point
-    point[0], point[1], extX + normal[0], extY + normal[1], 1,  // left extended
-    point[0], point[1], extX + normal[0], extY + normal[1], -1  // right extended
-  );
-
-  // Two triangles for the square
-  indices.push(
-    baseIndex, baseIndex + 1, baseIndex + 2,
-    baseIndex + 1, baseIndex + 3, baseIndex + 2
-  );
-
-  return baseIndex + 4;
-}
 
 /**
  * Extrude a polyline into a triangle mesh suitable for rendering.
@@ -156,8 +37,8 @@ export function extrudeLine(
   const indices: number[] = [];
 
   // Compute segment normals and directions
-  const normals: [number, number][] = [];
-  const directions: [number, number][] = [];
+  const normals: Vec2[] = [];
+  const directions: Vec2[] = [];
 
   for (let i = 0; i < coords.length - 1; i++) {
     const p1 = coords[i]!;
