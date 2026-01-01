@@ -13,17 +13,18 @@ const draw = tessera.createDrawContext();
 // ============================================
 
 // Grid layout in world coordinates (0-1 range)
+// 317 x 316 = 100,172 shapes
 const GRID = {
-  startX: 0.23,
-  startY: 0.35,
-  cellWidth: 0.0008,
-  cellHeight: 0.0008,
-  cols: 20,
-  rows: 20,
+  startX: 0.1,
+  startY: 0.2,
+  cellWidth: 0.00025,
+  cellHeight: 0.00025,
+  cols: 317,
+  rows: 316,
 };
 
 // Shape size
-const SHAPE_SIZE = 0.00025;
+const SHAPE_SIZE = 0.00008;
 
 // ============================================
 // SHAPE DATA
@@ -35,15 +36,10 @@ interface GridShape {
   row: number;
   col: number;
   shape: ShapeType;
-  baseColor: [number, number, number];
-  strokeWidth: number;
+  color: [number, number, number];
   size: number;
   rotation: number;
   rotationSpeed: number;
-  colorPhase: number;
-  colorSpeed: number;
-  opacityPhase: number;
-  opacitySpeed: number;
 }
 
 const shapes: GridShape[] = [];
@@ -82,25 +78,14 @@ for (let row = 0; row < GRID.rows; row++) {
     const direction = ((row + col) % 2 === 0) ? 1 : -1;
     const rotationSpeed = direction * (0.5 + speedVariation * 1.5); // 0.5 to 2.0 rad/s
 
-    // Color and opacity animation
-    const colorPhase = ((row * 3 + col * 5) % 17) / 17 * Math.PI * 2;
-    const colorSpeed = 0.3 + ((row * 11 + col * 7) % 10) / 10 * 0.7; // 0.3 to 1.0
-    const opacityPhase = ((row * 5 + col * 11) % 13) / 13 * Math.PI * 2;
-    const opacitySpeed = 0.5 + ((row * 13 + col * 3) % 10) / 10 * 1.0; // 0.5 to 1.5
-
     shapes.push({
       row,
       col,
       shape: shapeType,
-      baseColor,
-      strokeWidth: 2,
+      color: baseColor,
       size: SHAPE_SIZE * sizeVariation,
       rotation: 0,
       rotationSpeed,
-      colorPhase,
-      colorSpeed,
-      opacityPhase,
-      opacitySpeed,
     });
   }
 }
@@ -108,109 +93,92 @@ for (let row = 0; row < GRID.rows; row++) {
 console.log(`Created ${shapes.length} shapes in a ${GRID.cols}x${GRID.rows} grid`);
 
 // ============================================
-// DRAWING FUNCTIONS
+// PRE-COMPUTED SHAPE TEMPLATES
 // ============================================
 
-function drawShape(
-  cx: number,
-  cy: number,
-  size: number,
-  shape: ShapeType,
-  rotation: number,
-  fill: boolean = true
-) {
-  if (shape === "circle") {
-    // Circles don't rotate visually, but we still draw them
-    draw.beginPath();
-    draw.arc(cx, cy, size, 0, Math.PI * 2);
-    if (fill) {
-      draw.fill();
-    } else {
-      draw.stroke();
-    }
-  } else if (shape === "star") {
-    // 5-pointed star
-    const outerRadius = size;
-    const innerRadius = size * 0.4;
-    const points = 5;
+interface ShapeTemplate {
+  // Unit vertices (radius 1, centered at origin)
+  vertices: number[]; // [x0, y0, x1, y1, ...]
+  indices: number[];
+}
 
-    draw.beginPath();
-    for (let i = 0; i < points * 2; i++) {
-      const angle = rotation + (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
-      const r = i % 2 === 0 ? outerRadius : innerRadius;
-      const x = cx + Math.cos(angle) * r;
-      const y = cy + Math.sin(angle) * r;
-      if (i === 0) {
-        draw.moveTo(x, y);
-      } else {
-        draw.lineTo(x, y);
-      }
-    }
-    draw.closePath();
-    if (fill) {
-      draw.fill();
-    } else {
-      draw.stroke();
-    }
-  } else {
-    // Regular polygons
-    let sides: number;
-    let angleOffset = 0;
-
-    switch (shape) {
-      case "triangle":
-        sides = 3;
-        angleOffset = -Math.PI / 2; // Point up
-        break;
-      case "square":
-        sides = 4;
-        angleOffset = Math.PI / 4; // Flat on bottom
-        break;
-      case "diamond":
-        sides = 4;
-        angleOffset = 0; // Point on bottom
-        break;
-      case "pentagon":
-        sides = 5;
-        angleOffset = -Math.PI / 2;
-        break;
-      case "hexagon":
-        sides = 6;
-        angleOffset = 0;
-        break;
-      case "octagon":
-        sides = 8;
-        angleOffset = Math.PI / 8;
-        break;
-      default:
-        sides = 4;
-    }
-
-    draw.beginPath();
-    for (let i = 0; i < sides; i++) {
-      const angle = rotation + angleOffset + (i / sides) * Math.PI * 2;
-      const x = cx + Math.cos(angle) * size;
-      const y = cy + Math.sin(angle) * size;
-      if (i === 0) {
-        draw.moveTo(x, y);
-      } else {
-        draw.lineTo(x, y);
-      }
-    }
-    draw.closePath();
-    if (fill) {
-      draw.fill();
-    } else {
-      draw.stroke();
-    }
+// Generate unit polygon vertices
+function generatePolygonVertices(sides: number, angleOffset: number): number[] {
+  const verts: number[] = [];
+  for (let i = 0; i < sides; i++) {
+    const angle = angleOffset + (i / sides) * Math.PI * 2;
+    verts.push(Math.cos(angle), Math.sin(angle));
   }
+  return verts;
 }
 
-function getShapeCenter(row: number, col: number): [number, number] {
-  const x = GRID.startX + col * GRID.cellWidth + GRID.cellWidth / 2;
-  const y = GRID.startY + row * GRID.cellHeight + GRID.cellHeight / 2;
-  return [x, y];
+// Generate unit circle vertices
+function generateCircleVertices(segments: number): number[] {
+  const verts: number[] = [];
+  for (let i = 0; i < segments; i++) {
+    const angle = (i / segments) * Math.PI * 2;
+    verts.push(Math.cos(angle), Math.sin(angle));
+  }
+  return verts;
 }
+
+// Generate star vertices
+function generateStarVertices(points: number, innerRatio: number): number[] {
+  const verts: number[] = [];
+  for (let i = 0; i < points * 2; i++) {
+    const angle = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const r = i % 2 === 0 ? 1 : innerRatio;
+    verts.push(Math.cos(angle) * r, Math.sin(angle) * r);
+  }
+  return verts;
+}
+
+// Tessellate a polygon using fan triangulation (works for convex shapes)
+function fanTessellate(vertexCount: number): number[] {
+  const indices: number[] = [];
+  for (let i = 1; i < vertexCount - 1; i++) {
+    indices.push(0, i, i + 1);
+  }
+  return indices;
+}
+
+// Pre-compute all shape templates
+const shapeTemplates: Record<ShapeType, ShapeTemplate> = {
+  circle: {
+    vertices: generateCircleVertices(32),
+    indices: fanTessellate(32),
+  },
+  triangle: {
+    vertices: generatePolygonVertices(3, -Math.PI / 2),
+    indices: fanTessellate(3),
+  },
+  square: {
+    vertices: generatePolygonVertices(4, Math.PI / 4),
+    indices: fanTessellate(4),
+  },
+  diamond: {
+    vertices: generatePolygonVertices(4, 0),
+    indices: fanTessellate(4),
+  },
+  pentagon: {
+    vertices: generatePolygonVertices(5, -Math.PI / 2),
+    indices: fanTessellate(5),
+  },
+  hexagon: {
+    vertices: generatePolygonVertices(6, 0),
+    indices: fanTessellate(6),
+  },
+  octagon: {
+    vertices: generatePolygonVertices(8, Math.PI / 8),
+    indices: fanTessellate(8),
+  },
+  star: {
+    vertices: generateStarVertices(5, 0.4),
+    indices: fanTessellate(10),
+  },
+};
+
+console.log("Pre-computed shape templates");
 
 // ============================================
 // MAIN RENDER LOOP
@@ -221,10 +189,9 @@ const gridCenterX = GRID.startX + (GRID.cols * GRID.cellWidth) / 2;
 const gridCenterY = GRID.startY + (GRID.rows * GRID.cellHeight) / 2;
 tessera.camera.centerX = gridCenterX;
 tessera.camera.centerY = gridCenterY;
-tessera.camera.zoom = 10;
+tessera.camera.zoom = 8; // Zoomed out to see more shapes
 
 let lastTime = performance.now();
-let elapsedTime = 0;
 
 const originalRender = tessera.render.bind(tessera);
 tessera.render = function () {
@@ -232,7 +199,6 @@ tessera.render = function () {
   const now = performance.now();
   const dt = (now - lastTime) / 1000;
   lastTime = now;
-  elapsedTime += dt;
 
   // Update rotations
   for (const shape of shapes) {
@@ -246,34 +212,41 @@ tessera.render = function () {
   const w = this.canvas.width;
   const h = this.canvas.height;
 
+  // Get visible bounds for culling
+  const bounds = this.camera.getVisibleBounds(w, h);
+
   // ============================================
   // ALL IMMEDIATE MODE DRAWING
   // ============================================
   draw.begin(matrix, w, h);
 
-  // Draw all shapes in grid
+  // Draw all shapes in grid using pre-computed templates
+  let culledCount = 0;
   for (const shape of shapes) {
-    const [cx, cy] = getShapeCenter(shape.row, shape.col);
+    const cx = GRID.startX + shape.col * GRID.cellWidth + GRID.cellWidth / 2;
+    const cy = GRID.startY + shape.row * GRID.cellHeight + GRID.cellHeight / 2;
+    const r = shape.size; // Bounding radius
 
-    // Animate color - shift hue by cycling through RGB
-    const colorT = elapsedTime * shape.colorSpeed + shape.colorPhase;
-    const colorShift = Math.sin(colorT) * 0.3; // -0.3 to +0.3
-    const r = Math.max(0, Math.min(1, shape.baseColor[0] + colorShift));
-    const g = Math.max(0, Math.min(1, shape.baseColor[1] + Math.sin(colorT + 2) * 0.2));
-    const b = Math.max(0, Math.min(1, shape.baseColor[2] - colorShift));
+    // Frustum culling: skip if shape is completely outside view
+    if (cx + r < bounds.left || cx - r > bounds.right ||
+        cy + r < bounds.top || cy - r > bounds.bottom) {
+      culledCount++;
+      continue;
+    }
 
-    // Animate opacity
-    const opacityT = elapsedTime * shape.opacitySpeed + shape.opacityPhase;
-    const opacity = 0.4 + Math.sin(opacityT) * 0.3; // 0.1 to 0.7
+    // Get pre-computed template
+    const template = shapeTemplates[shape.shape];
 
-    // Fill
-    draw.fillStyle = [r, g, b, opacity];
-    drawShape(cx, cy, shape.size, shape.shape, shape.rotation, true);
-
-    // Stroke (darker, more opaque)
-    draw.strokeStyle = [r * 0.6, g * 0.6, b * 0.6, Math.min(1, opacity + 0.4)];
-    draw.lineWidth = shape.strokeWidth;
-    drawShape(cx, cy, shape.size, shape.shape, shape.rotation, false);
+    // Fill using template (no tessellation needed!)
+    draw.fillStyle = [shape.color[0], shape.color[1], shape.color[2], 0.7];
+    draw.fillTemplate(
+      template.vertices,
+      template.indices,
+      cx,
+      cy,
+      shape.size,
+      shape.rotation
+    );
   }
 
   draw.end();

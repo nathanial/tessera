@@ -83,4 +83,23 @@ export class Camera {
   getTileZoom(): number {
     return Math.floor(this.zoom);
   }
+
+  /** Get the visible world bounds for culling */
+  getVisibleBounds(viewportWidth: number, viewportHeight: number): {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  } {
+    const worldSizeInPixels = Camera.TILE_SIZE * Math.pow(2, this.zoom);
+    const viewWidth = viewportWidth / worldSizeInPixels;
+    const viewHeight = viewportHeight / worldSizeInPixels;
+
+    return {
+      left: this.centerX - viewWidth / 2,
+      right: this.centerX + viewWidth / 2,
+      top: this.centerY - viewHeight / 2,
+      bottom: this.centerY + viewHeight / 2,
+    };
+  }
 }

@@ -540,6 +540,60 @@ export class DrawContext {
     this.stroke();
   }
 
+  // ==================== Template Rendering ====================
+
+  /**
+   * Fill a pre-tessellated shape template with transformation.
+   * This is much faster than path-based rendering for repeated shapes.
+   *
+   * @param vertices - Unit vertices [x0, y0, x1, y1, ...] (radius 1, centered at origin)
+   * @param indices - Triangle indices
+   * @param cx - Center X position
+   * @param cy - Center Y position
+   * @param size - Scale factor (radius)
+   * @param rotation - Rotation in radians
+   */
+  fillTemplate(
+    vertices: number[],
+    indices: number[],
+    cx: number,
+    cy: number,
+    size: number,
+    rotation: number
+  ): void {
+    const vertexOffset = this.fillVertices.count / 2;
+    const indexOffset = this.fillIndices.count;
+
+    // Pre-compute rotation
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+
+    // Transform and add vertices
+    const numVerts = vertices.length / 2;
+    for (let i = 0; i < numVerts; i++) {
+      const x = vertices[i * 2]!;
+      const y = vertices[i * 2 + 1]!;
+
+      // Rotate, scale, translate
+      const rx = x * cos - y * sin;
+      const ry = x * sin + y * cos;
+      this.fillVertices.push(cx + rx * size);
+      this.fillVertices.push(cy + ry * size);
+    }
+
+    // Add indices with offset
+    this.fillIndices.pushArrayWithOffset(indices, vertexOffset);
+
+    this.fillBatches.push({
+      type: "fill",
+      color: this.state.getEffectiveFillColor(),
+      vertexOffset,
+      vertexCount: numVerts,
+      indexOffset,
+      indexCount: indices.length,
+    });
+  }
+
   // ==================== GeoJSON Helpers ====================
 
   /**
