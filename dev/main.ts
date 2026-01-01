@@ -1,4 +1,4 @@
-import { Tessera, DrawContext, VERSION, lonLatToTessera } from "../src/index";
+import { Tessera, DrawContext, VERSION, lonLatToTessera, SDFRenderer, createFontAtlas } from "../src/index";
 import earcut from "earcut";
 import { ADSBLayer, getAltitudeColor } from "./adsb";
 
@@ -9,6 +9,27 @@ const tessera = new Tessera({ canvas });
 
 // Create immediate mode draw context
 const draw = tessera.createDrawContext();
+
+// Create SDF text renderer for aircraft labels
+const sdfRenderer = new SDFRenderer(tessera.gl);
+const fontAtlas = createFontAtlas({
+  fontFamily: "Arial, sans-serif",
+  fontSize: 32,
+  atlasSize: 512,
+});
+fontAtlas.ready.then(() => {
+  sdfRenderer.loadFontAtlas(fontAtlas.metadata, fontAtlas.image);
+  console.log("Font atlas loaded for aircraft labels");
+});
+
+// Text styling for aircraft labels
+const labelStyle = {
+  fontSize: 24,
+  color: [1, 1, 1, 1] as [number, number, number, number],
+  haloColor: [0, 0, 0, 0.8] as [number, number, number, number],
+  haloWidth: 3,
+  align: "left" as const,
+};
 
 // ============================================
 // GRID CONFIGURATION
@@ -189,13 +210,8 @@ const AIRCRAFT_MIN_SCREEN_SIZE = 12; // Minimum size in pixels (when zoomed out)
 const AIRCRAFT_MAX_SCREEN_SIZE = 50; // Maximum size in pixels (when zoomed in)
 const AIRCRAFT_BASE_WORLD_SIZE = 0.0015; // Base size that scales with zoom
 
-// Initialize ADSB layer
-const adsbLayer = new ADSBLayer();
-
-// Fetch aircraft data periodically
-const FETCH_INTERVAL = 15000; // 15 seconds
-adsbLayer.fetch(); // Initial fetch
-setInterval(() => adsbLayer.fetch(), FETCH_INTERVAL);
+// Initialize ADSB layer with simulated aircraft
+const adsbLayer = new ADSBLayer(10000); // 10k simulated aircraft
 
 // ============================================
 // MAIN RENDER LOOP
@@ -221,6 +237,9 @@ tessera.render = function () {
   }
   hueOffset += dt * 0.1; // Slow hue animation
   animTime += dt * WAVE_SPEED;
+
+  // Update simulated aircraft positions
+  adsbLayer.update();
 
   // Render tiles first
   originalRender();
@@ -316,6 +335,28 @@ tessera.render = function () {
   }
 
   draw.end();
+
+  // ============================================
+  // DRAW AIRCRAFT LABELS
+  // ============================================
+  sdfRenderer.clearText();
+
+  // Compute label offset in world units (offset to the right of aircraft)
+  const labelOffsetWorld = aircraftSize * 1.2;
+
+  for (const ac of adsbLayer.aircraft) {
+    // Frustum culling (same as aircraft)
+    if (ac.x + aircraftSize < bounds.left || ac.x - aircraftSize > bounds.right ||
+        ac.y + aircraftSize < bounds.top || ac.y - aircraftSize > bounds.bottom) {
+      continue;
+    }
+
+    // Use callsign if available, otherwise ICAO24 code
+    const label = ac.callsign || ac.icao24;
+    sdfRenderer.addText(label, ac.x + labelOffsetWorld, ac.y, labelStyle);
+  }
+
+  sdfRenderer.render(matrix, w, h);
 
   // Request next frame for continuous animation
   this.requestRender();

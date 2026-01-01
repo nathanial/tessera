@@ -1,23 +1,11 @@
 /**
- * ADS-B Aircraft Tracking Layer
+ * ADS-B Aircraft Tracking Layer (Simulated)
  *
- * Fetches real-time aircraft positions from the OpenSky Network API
- * and converts them to Tessera coordinates for rendering.
+ * Generates synthetic aircraft data for demo purposes.
+ * Simulates realistic flight paths across the continental US.
  */
 
 import { lonLatToTessera } from "../src/index";
-
-const OPENSKY_API = "https://opensky-network.org/api/states/all";
-
-// CORS proxy for production (OpenSky doesn't allow cross-origin requests)
-const CORS_PROXY = "https://corsproxy.io/?";
-
-function getApiUrl(): string {
-  // Use proxy in production (when not on localhost)
-  const isLocalhost = typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-  return isLocalhost ? OPENSKY_API : CORS_PROXY + encodeURIComponent(OPENSKY_API);
-}
 
 export interface Aircraft {
   icao24: string;
@@ -30,71 +18,206 @@ export interface Aircraft {
   onGround: boolean;
 }
 
+// Internal aircraft state for simulation
+interface SimulatedAircraft extends Aircraft {
+  lon: number;
+  lat: number;
+  headingDeg: number; // degrees for easier math
+}
+
+// World bounding box (valid Mercator range)
+const WORLD_BOUNDS = {
+  minLon: -180,
+  maxLon: 180,
+  minLat: -60,  // Exclude Antarctica
+  maxLat: 70,   // Exclude Arctic
+};
+
+// Airline prefixes for realistic callsigns (worldwide)
+const AIRLINES = [
+  // North America
+  "AAL", "UAL", "DAL", "SWA", "JBU", "ASA", "ACA", "WJA",
+  // Europe
+  "BAW", "AFR", "DLH", "KLM", "IBE", "SAS", "AZA", "TAP", "SWR", "AUA",
+  // Asia
+  "CCA", "CES", "CSN", "ANA", "JAL", "KAL", "AAR", "SIA", "THA", "MAS",
+  // Middle East
+  "UAE", "ETD", "QTR", "SIA", "THY",
+  // Oceania
+  "QFA", "ANZ", "VOZ",
+  // Cargo
+  "FDX", "UPS", "GTI", "CLX",
+];
+
+/**
+ * Generate a random hex string (ICAO24 format)
+ */
+function randomIcao24(): string {
+  return Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0");
+}
+
+/**
+ * Generate a random callsign
+ */
+function randomCallsign(): string {
+  const airline = AIRLINES[Math.floor(Math.random() * AIRLINES.length)]!;
+  const flight = Math.floor(Math.random() * 9000) + 100;
+  return `${airline}${flight}`;
+}
+
+/**
+ * Generate a random position within world bounds
+ */
+function randomPosition(): { lon: number; lat: number } {
+  return {
+    lon: WORLD_BOUNDS.minLon + Math.random() * (WORLD_BOUNDS.maxLon - WORLD_BOUNDS.minLon),
+    lat: WORLD_BOUNDS.minLat + Math.random() * (WORLD_BOUNDS.maxLat - WORLD_BOUNDS.minLat),
+  };
+}
+
 export class ADSBLayer {
   aircraft: Aircraft[] = [];
-  lastFetchTime: number = 0;
-  isFetching: boolean = false;
+  private simAircraft: SimulatedAircraft[] = [];
+  private lastUpdateTime: number = 0;
 
-  /**
-   * Fetch aircraft data from OpenSky Network.
-   * Returns immediately if already fetching or if called too soon.
-   */
-  async fetch(): Promise<void> {
-    if (this.isFetching) return;
-
-    this.isFetching = true;
-    try {
-      const response = await fetch(getApiUrl());
-      if (!response.ok) {
-        console.warn(`[ADSB] API error: ${response.status}`);
-        return;
-      }
-
-      const data = await response.json();
-      this.update(data.states || []);
-      this.lastFetchTime = Date.now();
-      console.log(`[ADSB] Fetched ${this.aircraft.length} aircraft`);
-    } catch (err) {
-      console.warn("[ADSB] Fetch failed:", err);
-    } finally {
-      this.isFetching = false;
-    }
+  constructor(private aircraftCount: number = 500) {
+    this.generateAircraft();
   }
 
   /**
-   * Parse OpenSky state vectors and convert to Aircraft objects.
-   *
-   * State vector indices:
-   * 0: icao24, 1: callsign, 5: longitude, 6: latitude,
-   * 7: baro_altitude, 8: on_ground, 9: velocity, 10: true_track
+   * Generate initial set of simulated aircraft
    */
-  private update(states: unknown[][]): void {
-    this.aircraft = [];
+  private generateAircraft(): void {
+    this.simAircraft = [];
 
-    for (const state of states) {
-      const lon = state[5] as number | null;
-      const lat = state[6] as number | null;
+    for (let i = 0; i < this.aircraftCount; i++) {
+      const pos = randomPosition();
+      const { x, y } = lonLatToTessera(pos.lon, pos.lat);
 
-      // Skip aircraft without position data
-      if (lon === null || lat === null) continue;
+      // Random heading (0-360 degrees)
+      const headingDeg = Math.random() * 360;
+      const heading = (headingDeg * Math.PI) / 180;
 
-      const { x, y } = lonLatToTessera(lon, lat);
+      // Random altitude: mix of ground, low, cruising
+      let altitude: number;
+      let onGround = false;
+      const altitudeClass = Math.random();
+      if (altitudeClass < 0.05) {
+        // 5% on ground
+        altitude = 0;
+        onGround = true;
+      } else if (altitudeClass < 0.15) {
+        // 10% low altitude (takeoff/landing)
+        altitude = 500 + Math.random() * 2000;
+      } else if (altitudeClass < 0.4) {
+        // 25% medium altitude
+        altitude = 3000 + Math.random() * 5000;
+      } else {
+        // 60% cruising altitude
+        altitude = 9000 + Math.random() * 4000;
+      }
 
-      // Convert true_track from degrees to radians
-      const trueTrack = state[10] as number | null;
-      const heading = trueTrack !== null ? (trueTrack * Math.PI) / 180 : 0;
+      // Velocity based on altitude (exaggerated for visual effect)
+      let velocity: number;
+      if (onGround) {
+        velocity = Math.random() * 500; // 0-500 m/s on ground
+      } else if (altitude < 3000) {
+        velocity = 2000 + Math.random() * 1500; // 2000-3500 m/s low alt
+      } else {
+        velocity = 5000 + Math.random() * 3000; // 5000-8000 m/s cruise
+      }
 
-      this.aircraft.push({
-        icao24: state[0] as string,
-        callsign: (state[1] as string | null)?.trim() || null,
+      this.simAircraft.push({
+        icao24: randomIcao24(),
+        callsign: Math.random() > 0.1 ? randomCallsign() : null, // 10% no callsign
         x,
         y,
-        altitude: (state[7] as number | null) ?? 0,
+        lon: pos.lon,
+        lat: pos.lat,
+        altitude,
         heading,
-        velocity: (state[9] as number | null) ?? 0,
-        onGround: state[8] as boolean,
+        headingDeg,
+        velocity,
+        onGround,
       });
     }
+
+    this.updatePublicList();
+    this.lastUpdateTime = performance.now();
+    console.log(`[ADSB] Generated ${this.aircraftCount} simulated aircraft`);
+  }
+
+  /**
+   * Update public aircraft list from simulation state
+   */
+  private updatePublicList(): void {
+    this.aircraft = this.simAircraft.map((ac) => ({
+      icao24: ac.icao24,
+      callsign: ac.callsign,
+      x: ac.x,
+      y: ac.y,
+      altitude: ac.altitude,
+      heading: ac.heading,
+      velocity: ac.velocity,
+      onGround: ac.onGround,
+    }));
+  }
+
+  /**
+   * Update aircraft positions based on elapsed time.
+   * Call this each frame for smooth animation.
+   */
+  update(): void {
+    const now = performance.now();
+    const dt = (now - this.lastUpdateTime) / 1000; // seconds
+    this.lastUpdateTime = now;
+
+    // Skip if dt is too large (tab was backgrounded)
+    if (dt > 1) return;
+
+    for (const ac of this.simAircraft) {
+      if (ac.onGround && ac.velocity < 5) continue; // Stationary
+
+      // Convert velocity from m/s to degrees/second
+      // At equator: 1 degree ≈ 111km, so 1 m/s ≈ 0.000009 deg/s
+      // Adjust for latitude (longitude degrees get smaller toward poles)
+      const metersPerDegLat = 111000;
+      const metersPerDegLon = 111000 * Math.cos((ac.lat * Math.PI) / 180);
+
+      // Heading: 0 = north, 90 = east, etc.
+      const headingRad = (ac.headingDeg * Math.PI) / 180;
+      const dLat = (ac.velocity * dt * Math.cos(headingRad)) / metersPerDegLat;
+      const dLon = (ac.velocity * dt * Math.sin(headingRad)) / metersPerDegLon;
+
+      ac.lat += dLat;
+      ac.lon += dLon;
+
+      // Slight heading drift for realism
+      ac.headingDeg += (Math.random() - 0.5) * 2 * dt;
+      ac.heading = (ac.headingDeg * Math.PI) / 180;
+
+      // Wrap around longitude (world wraps horizontally)
+      if (ac.lon < WORLD_BOUNDS.minLon) ac.lon += 360;
+      if (ac.lon > WORLD_BOUNDS.maxLon) ac.lon -= 360;
+      // Clamp latitude (can't wrap vertically)
+      if (ac.lat < WORLD_BOUNDS.minLat) ac.lat = WORLD_BOUNDS.minLat;
+      if (ac.lat > WORLD_BOUNDS.maxLat) ac.lat = WORLD_BOUNDS.maxLat;
+
+      // Update Tessera coordinates
+      const { x, y } = lonLatToTessera(ac.lon, ac.lat);
+      ac.x = x;
+      ac.y = y;
+    }
+
+    this.updatePublicList();
+  }
+
+  /**
+   * Compatibility method - now just regenerates aircraft
+   */
+  async fetch(): Promise<void> {
+    // No-op for simulated data (aircraft already generated)
+    // Could regenerate if needed
   }
 }
 
