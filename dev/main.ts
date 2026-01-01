@@ -1,5 +1,6 @@
-import { Tessera, DrawContext, VERSION } from "../src/index";
+import { Tessera, DrawContext, VERSION, lonLatToTessera } from "../src/index";
 import earcut from "earcut";
+import { ADSBLayer, getAltitudeColor } from "./adsb";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -13,11 +14,14 @@ const draw = tessera.createDrawContext();
 // GRID CONFIGURATION
 // ============================================
 
-// Grid layout in world coordinates (0-1 range)
+// Grid layout centered on the US
 // 317 x 316 = 100,172 shapes
+const usCenter = lonLatToTessera(-98, 39); // Central US (Kansas)
+const gridWidth = 317 * 0.00025;
+const gridHeight = 316 * 0.00025;
 const GRID = {
-  startX: 0.1,
-  startY: 0.2,
+  startX: usCenter.x - gridWidth / 2,
+  startY: usCenter.y - gridHeight / 2,
   cellWidth: 0.00025,
   cellHeight: 0.00025,
   cols: 317,
@@ -157,15 +161,38 @@ const shapeTemplates: Record<ShapeType, ShapeTemplate> = {
 console.log("Pre-computed shape templates");
 
 // ============================================
+// AIRCRAFT TEMPLATE & ADSB LAYER
+// ============================================
+
+// Aircraft triangle (pointing up, unit size)
+const aircraftVertices = [
+  0, -1,     // nose (top)
+  -0.5, 0.8, // left wing
+  0, 0.4,    // tail notch
+  0.5, 0.8,  // right wing
+];
+const aircraftIndices = earcut(aircraftVertices);
+
+const AIRCRAFT_MIN_SCREEN_SIZE = 12; // Minimum size in pixels (when zoomed out)
+const AIRCRAFT_MAX_SCREEN_SIZE = 50; // Maximum size in pixels (when zoomed in)
+const AIRCRAFT_BASE_WORLD_SIZE = 0.0015; // Base size that scales with zoom
+
+// Initialize ADSB layer
+const adsbLayer = new ADSBLayer();
+
+// Fetch aircraft data periodically
+const FETCH_INTERVAL = 15000; // 15 seconds
+adsbLayer.fetch(); // Initial fetch
+setInterval(() => adsbLayer.fetch(), FETCH_INTERVAL);
+
+// ============================================
 // MAIN RENDER LOOP
 // ============================================
 
-// Start centered on the grid
-const gridCenterX = GRID.startX + (GRID.cols * GRID.cellWidth) / 2;
-const gridCenterY = GRID.startY + (GRID.rows * GRID.cellHeight) / 2;
-tessera.camera.centerX = gridCenterX;
-tessera.camera.centerY = gridCenterY;
-tessera.camera.zoom = 8; // Zoomed out to see more shapes
+// Start centered on the US (same as grid)
+tessera.camera.centerX = usCenter.x;
+tessera.camera.centerY = usCenter.y;
+tessera.camera.zoom = 8; // Zoomed in to see grid shapes
 
 let lastTime = performance.now();
 
@@ -223,6 +250,42 @@ tessera.render = function () {
       shape.size,
       shape.rotation
     );
+  }
+
+  // ============================================
+  // DRAW AIRCRAFT
+  // ============================================
+  // Compute size: scales with zoom, clamped between min/max screen pixels
+  const viewWidth = bounds.right - bounds.left;
+  const pixelsPerWorldUnit = w / viewWidth;
+
+  // Calculate what screen size the base world size would produce
+  let screenSize = AIRCRAFT_BASE_WORLD_SIZE * pixelsPerWorldUnit;
+
+  // Clamp to min/max screen size
+  screenSize = Math.max(AIRCRAFT_MIN_SCREEN_SIZE, Math.min(AIRCRAFT_MAX_SCREEN_SIZE, screenSize));
+
+  // Convert back to world size
+  const aircraftSize = screenSize / pixelsPerWorldUnit;
+
+  let aircraftDrawn = 0;
+  for (const ac of adsbLayer.aircraft) {
+    // Frustum culling
+    if (ac.x + aircraftSize < bounds.left || ac.x - aircraftSize > bounds.right ||
+        ac.y + aircraftSize < bounds.top || ac.y - aircraftSize > bounds.bottom) {
+      continue;
+    }
+
+    draw.fillStyle = getAltitudeColor(ac.altitude, ac.onGround);
+    draw.fillTemplate(
+      aircraftVertices,
+      aircraftIndices,
+      ac.x,
+      ac.y,
+      aircraftSize,
+      ac.heading // Rotate to match flight direction
+    );
+    aircraftDrawn++;
   }
 
   draw.end();

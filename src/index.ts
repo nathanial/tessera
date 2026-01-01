@@ -54,3 +54,6 @@ export type {
   DynamicBufferType,
   Coord,
 } from "./immediate/index";
+
+// Geographic projection utilities
+export { lonLatToTessera, tesseraToLonLat } from "./geo/index";
