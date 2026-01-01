@@ -23,17 +23,17 @@ export const tileFragmentShader = `#version 300 es
 precision mediump float;
 
 uniform sampler2D u_texture;
+uniform vec2 u_uvOffset;   // UV offset for fallback tile sampling (0,0 for exact tile)
+uniform float u_uvScale;   // UV scale for fallback tile sampling (1.0 for exact tile)
+
 in vec2 v_texCoord;
 out vec4 fragColor;
 
 void main() {
-  vec4 texColor = texture(u_texture, v_texCoord);
-  // Debug: show texture coords as colors if texture is empty
-  if (texColor.a < 0.1) {
-    fragColor = vec4(v_texCoord.x, v_texCoord.y, 0.5, 1.0);
-  } else {
-    fragColor = texColor;
-  }
+  // Apply UV transform for fallback tiles
+  vec2 uv = u_uvOffset + v_texCoord * u_uvScale;
+  vec4 texColor = texture(u_texture, uv);
+  fragColor = texColor;
 }
 `;
 

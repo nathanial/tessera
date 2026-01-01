@@ -7,7 +7,7 @@ import { Geometry } from "./Geometry";
 import { TileManager } from "./TileManager";
 import { DrawContext } from "./immediate/DrawContext";
 import { createProgram } from "./shaders/compile";
-import { tileVertexShader, tileFragmentShader, debugFragmentShader } from "./shaders/tile";
+import { tileVertexShader, tileFragmentShader } from "./shaders/tile";
 
 export interface TesseraOptions {
   canvas: HTMLCanvasElement;
@@ -20,7 +20,6 @@ export class Tessera {
 
   private tileManager: TileManager;
   private program: WebGLProgram;
-  private debugProgram: WebGLProgram;
   private quadGeometry: Geometry;
 
   // Uniform locations
@@ -29,12 +28,8 @@ export class Tessera {
     tileOffset: WebGLUniformLocation;
     tileScale: WebGLUniformLocation;
     texture: WebGLUniformLocation;
-  };
-
-  private debugUniforms: {
-    matrix: WebGLUniformLocation;
-    tileOffset: WebGLUniformLocation;
-    tileScale: WebGLUniformLocation;
+    uvOffset: WebGLUniformLocation;
+    uvScale: WebGLUniformLocation;
   };
 
   private animationId: number | null = null;
@@ -55,9 +50,8 @@ export class Tessera {
     this.camera = new Camera();
     this.tileManager = new TileManager(gl, () => this.requestRender());
 
-    // Create shader programs
+    // Create shader program
     this.program = createProgram(gl, tileVertexShader, tileFragmentShader);
-    this.debugProgram = createProgram(gl, tileVertexShader, debugFragmentShader);
 
     // Get uniform locations
     this.uniforms = {
@@ -65,12 +59,8 @@ export class Tessera {
       tileOffset: gl.getUniformLocation(this.program, "u_tileOffset")!,
       tileScale: gl.getUniformLocation(this.program, "u_tileScale")!,
       texture: gl.getUniformLocation(this.program, "u_texture")!,
-    };
-
-    this.debugUniforms = {
-      matrix: gl.getUniformLocation(this.debugProgram, "u_matrix")!,
-      tileOffset: gl.getUniformLocation(this.debugProgram, "u_tileOffset")!,
-      tileScale: gl.getUniformLocation(this.debugProgram, "u_tileScale")!,
+      uvOffset: gl.getUniformLocation(this.program, "u_uvOffset")!,
+      uvScale: gl.getUniformLocation(this.program, "u_uvScale")!,
     };
 
     // Create quad geometry
@@ -155,45 +145,38 @@ export class Tessera {
     const tileScale = 1 / numTiles;
     gl.uniform1f(this.uniforms.tileScale, tileScale);
 
-    // Draw each tile
+    // Draw each tile (with fallback to lower-zoom tiles)
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.uniforms.texture, 0);
 
     let loadedCount = 0;
-
-    // First pass: draw debug quads for ALL tiles (so we can see geometry works)
-    gl.useProgram(this.debugProgram);
-    gl.uniformMatrix3fv(this.debugUniforms.matrix, false, matrix);
-    gl.uniform1f(this.debugUniforms.tileScale, tileScale);
+    let fallbackCount = 0;
 
     for (const tile of tiles) {
-      gl.uniform2f(this.debugUniforms.tileOffset, tile.x, tile.y);
-      this.quadGeometry.draw();
-    }
-
-    // Second pass: overdraw with textured tiles where available
-    gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
-    gl.uniform1f(this.uniforms.tileScale, tileScale);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(this.uniforms.texture, 0);
-
-    for (const tile of tiles) {
-      const texture = this.tileManager.getTile(tile.z, tile.x, tile.y);
-      if (!texture) {
-        // Tile not loaded yet, request another render
+      const result = this.tileManager.getTileWithFallback(tile.z, tile.x, tile.y);
+      if (!result) {
+        // No tile available (shouldn't happen after base tiles load)
         this.requestRender();
         continue;
       }
 
-      loadedCount++;
-      gl.bindTexture(gl.TEXTURE_2D, texture);
+      if (result.isExact) {
+        loadedCount++;
+      } else {
+        fallbackCount++;
+        // Request render to check if exact tile has loaded
+        this.requestRender();
+      }
+
+      gl.bindTexture(gl.TEXTURE_2D, result.texture);
       gl.uniform2f(this.uniforms.tileOffset, tile.x, tile.y);
+      gl.uniform2f(this.uniforms.uvOffset, result.uvOffset[0], result.uvOffset[1]);
+      gl.uniform1f(this.uniforms.uvScale, result.uvScale);
       this.quadGeometry.draw();
     }
 
-    if (now - this.lastDebugTime < 100 && loadedCount > 0) {
-      console.log(`[Tessera] rendered ${loadedCount}/${tiles.length} tiles`);
+    if (now - this.lastDebugTime < 100 && (loadedCount > 0 || fallbackCount > 0)) {
+      console.log(`[Tessera] rendered ${loadedCount} exact + ${fallbackCount} fallback / ${tiles.length} tiles`);
     }
 
     this.quadGeometry.unbind();
@@ -228,7 +211,6 @@ export class Tessera {
     this.stop();
     this.tileManager.destroy();
     this.gl.deleteProgram(this.program);
-    this.gl.deleteProgram(this.debugProgram);
     this.quadGeometry.destroy();
   }
 
