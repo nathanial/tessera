@@ -76,6 +76,36 @@ function screenToWorld(
   return { worldX, worldY };
 }
 
+/**
+ * Check if object at worldX is visible with horizontal wrapping.
+ * Returns the X coordinate to use for rendering if visible, or null if not visible.
+ */
+function getWrappedX(
+  worldX: number,
+  radius: number,
+  boundsLeft: number,
+  boundsRight: number
+): number | null {
+  // Check primary position
+  if (worldX + radius >= boundsLeft && worldX - radius <= boundsRight) {
+    return worldX;
+  }
+
+  // Check wrapped +1 (for when camera is past x=1)
+  const wrappedPlus = worldX + 1;
+  if (wrappedPlus + radius >= boundsLeft && wrappedPlus - radius <= boundsRight) {
+    return wrappedPlus;
+  }
+
+  // Check wrapped -1 (for when camera is before x=0)
+  const wrappedMinus = worldX - 1;
+  if (wrappedMinus + radius >= boundsLeft && wrappedMinus - radius <= boundsRight) {
+    return wrappedMinus;
+  }
+
+  return null; // Not visible at any wrap position
+}
+
 /** Group aircraft into spatial bins for label clustering */
 function clusterLabels(
   aircraft: ClusterableItem[],
@@ -84,6 +114,7 @@ function clusterLabels(
   viewportHeight: number,
   labelOffsetWorld: number,
   labelFontSize: number,
+  bounds: { left: number; right: number; top: number; bottom: number },
   fixedGridOffset?: { x: number; y: number }
 ): { clusters: LabelCluster[]; gridOffset: { x: number; y: number } } {
   const grid = new Map<string, LabelCluster>();
@@ -102,18 +133,27 @@ function clusterLabels(
   // Estimate label width in screen pixels for center-based binning
   const estLabelWidth = labelFontSize * LABEL_CHAR_WIDTH * LABEL_AVG_CHARS;
   const halfLabelWidth = estLabelWidth / 2;
+  // Label radius in world units for wrapping check
+  const labelRadiusWorld = (estLabelWidth / viewportWidth) * (bounds.right - bounds.left);
 
   for (const ac of aircraft) {
+    // Y culling (no wrapping for vertical)
+    if (ac.y < bounds.top || ac.y > bounds.bottom) {
+      continue;
+    }
+
     // Use LABEL position for binning, not aircraft position
     // Labels are offset to the right of aircraft
     const labelX = ac.x + labelOffsetWorld;
     const labelY = ac.y;
-    const { screenX, screenY } = worldToScreen(labelX, labelY, matrix, viewportWidth, viewportHeight);
 
-    // Skip if label is off-screen
-    if (screenX < 0 || screenX > viewportWidth || screenY < 0 || screenY > viewportHeight) {
+    // Check wrapped X position for visibility
+    const renderLabelX = getWrappedX(labelX, labelRadiusWorld, bounds.left, bounds.right);
+    if (renderLabelX === null) {
       continue;
     }
+
+    const { screenX, screenY } = worldToScreen(renderLabelX, labelY, matrix, viewportWidth, viewportHeight);
 
     // Use label CENTER for cell assignment (improves border behavior)
     const labelCenterX = screenX + halfLabelWidth;
@@ -126,7 +166,8 @@ function clusterLabels(
       cluster = { aircraft: [], screenX, screenY };
       grid.set(key, cluster);
     }
-    cluster.aircraft.push(ac);
+    // Store wrapped aircraft position for rendering
+    cluster.aircraft.push({ ...ac, x: renderLabelX - labelOffsetWorld });
   }
 
   return { clusters: Array.from(grid.values()), gridOffset: currentOffset };
@@ -406,9 +447,15 @@ tessera.render = function () {
     const cy = baseCy + waveY;
     const r = shape.size; // Bounding radius
 
-    // Frustum culling: skip if shape is completely outside view
-    if (cx + r < bounds.left || cx - r > bounds.right ||
-        cy + r < bounds.top || cy - r > bounds.bottom) {
+    // Y culling (no wrapping for vertical)
+    if (cy + r < bounds.top || cy - r > bounds.bottom) {
+      culledCount++;
+      continue;
+    }
+
+    // X culling with horizontal wrapping
+    const renderCx = getWrappedX(cx, r, bounds.left, bounds.right);
+    if (renderCx === null) {
       culledCount++;
       continue;
     }
@@ -425,7 +472,7 @@ tessera.render = function () {
     draw.fillTemplate(
       template.vertices,
       template.indices,
-      cx,
+      renderCx,
       cy,
       shape.size,
       shape.rotation
@@ -442,9 +489,14 @@ tessera.render = function () {
 
   let aircraftDrawn = 0;
   for (const ac of adsbLayer.aircraft) {
-    // Frustum culling
-    if (ac.x + aircraftSize < bounds.left || ac.x - aircraftSize > bounds.right ||
-        ac.y + aircraftSize < bounds.top || ac.y - aircraftSize > bounds.bottom) {
+    // Y culling (no wrapping for vertical)
+    if (ac.y + aircraftSize < bounds.top || ac.y - aircraftSize > bounds.bottom) {
+      continue;
+    }
+
+    // X culling with horizontal wrapping
+    const renderX = getWrappedX(ac.x, aircraftSize, bounds.left, bounds.right);
+    if (renderX === null) {
       continue;
     }
 
@@ -452,7 +504,7 @@ tessera.render = function () {
     draw.fillTemplate(
       aircraftVertices,
       aircraftIndices,
-      ac.x,
+      renderX,
       ac.y,
       aircraftSize,
       ac.heading // Rotate to match flight direction
@@ -480,6 +532,7 @@ tessera.render = function () {
     h,
     labelOffsetWorld,
     labelStyle.fontSize,
+    bounds,
     isZooming ? cachedGridOffset ?? undefined : undefined
   );
 

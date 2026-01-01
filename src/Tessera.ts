@@ -169,7 +169,8 @@ export class Tessera {
       }
 
       gl.bindTexture(gl.TEXTURE_2D, result.texture);
-      gl.uniform2f(this.uniforms.tileOffset, tile.x, tile.y);
+      // Use worldX for positioning (unwrapped), tile.x is for texture lookup
+      gl.uniform2f(this.uniforms.tileOffset, tile.worldX, tile.y);
       gl.uniform2f(this.uniforms.uvOffset, result.uvOffset[0], result.uvOffset[1]);
       gl.uniform1f(this.uniforms.uvScale, result.uvScale);
       this.quadGeometry.draw();

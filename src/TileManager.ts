@@ -4,8 +4,11 @@
 
 export interface TileCoord {
   z: number;
+  /** Wrapped X coordinate for texture lookup (0 to 2^z - 1) */
   x: number;
   y: number;
+  /** Unwrapped X coordinate for world positioning (can be negative or >= 2^z) */
+  worldX: number;
 }
 
 export interface LoadedTile {
@@ -112,7 +115,7 @@ export class TileManager {
         const wrappedX = ((x % numTiles) + numTiles) % numTiles;
         // Clamp Y coordinate (no vertical wrapping)
         if (y >= 0 && y < numTiles) {
-          tiles.push({ z: tileZoom, x: wrappedX, y });
+          tiles.push({ z: tileZoom, x: wrappedX, y, worldX: x });
         }
       }
     }
