@@ -9,13 +9,13 @@
 - [x] **Tile Rendering** - Raster tile loading with retina support (Carto Voyager @2x)
 - [x] **Buffer Management** - Vertex/index buffer abstraction with VRAM lifecycle
 
-## Phase 2: Geometry Pipeline
+## Phase 2: Geometry Pipeline ✅
 
-- [ ] **Polygon Tessellation** - Ear-clipping algorithm for GeoJSON polygons
-- [ ] **Polyline Extrusion** - Triangle ribbon generation from line coordinates
-- [ ] **Join Styles** - Miter, bevel, and round joins for polylines
-- [ ] **Cap Styles** - Butt, square, and round caps
-- [ ] **Screen-Space Line Widths** - Pixel-perfect widths at any zoom
+- [x] **Polygon Tessellation** - Ear-clipping algorithm for GeoJSON polygons (using earcut)
+- [x] **Polyline Extrusion** - Triangle ribbon generation from line coordinates
+- [x] **Join Styles** - Miter joins for polylines (bevel/round planned for later)
+- [x] **Cap Styles** - Butt, square, and round caps
+- [x] **Screen-Space Line Widths** - Pixel-perfect widths at any zoom
 
 ## Phase 3: Rendering Features
 

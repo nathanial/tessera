@@ -10,3 +10,7 @@ export { TileManager, type TileCoord, type LoadedTile } from "./TileManager";
 export { Buffer, type BufferTarget, type BufferUsage } from "./Buffer";
 export { Geometry, type AttributeLayout, type GeometryOptions } from "./Geometry";
 export * as mat3 from "./math/mat3";
+
+// Phase 2: Geometry Pipeline
+export { FeatureRenderer, type Color, type FeatureStyle } from "./FeatureRenderer";
+export * from "./geometry/index";

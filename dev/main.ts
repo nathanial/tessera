@@ -1,14 +1,115 @@
-import { Tessera, VERSION } from "../src/index";
+import { Tessera, FeatureRenderer, VERSION } from "../src/index";
 
 console.log(`Tessera v${VERSION}`);
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const tessera = new Tessera({ canvas });
 
+// Create feature renderer for GeoJSON overlay
+const featureRenderer = new FeatureRenderer(tessera.gl);
+
+/**
+ * Convert WGS84 coordinates to Web Mercator (0-1 world space)
+ */
+function lngLatToWorld(lng: number, lat: number): [number, number] {
+  const x = (lng + 180) / 360;
+  const latRad = (lat * Math.PI) / 180;
+  const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
+  return [x, y];
+}
+
+/**
+ * Convert a GeoJSON coordinate array from WGS84 to world space
+ */
+function convertCoords(coords: number[][]): number[][] {
+  return coords.map(([lng, lat]) => lngLatToWorld(lng!, lat!));
+}
+
+// Sample polygon: San Francisco downtown area
+const sfPolygon = {
+  type: "Polygon" as const,
+  coordinates: [
+    convertCoords([
+      [-122.42, 37.79],
+      [-122.40, 37.79],
+      [-122.40, 37.77],
+      [-122.42, 37.77],
+      [-122.42, 37.79],
+    ]),
+  ],
+};
+
+featureRenderer.addFeature(sfPolygon, {
+  fillColor: [0.2, 0.6, 0.9, 0.4],
+  strokeColor: [0.1, 0.3, 0.6, 1.0],
+  strokeWidth: 3,
+  strokeCap: "round",
+});
+
+// Sample line: A route through SF
+const routeLine = {
+  type: "LineString" as const,
+  coordinates: convertCoords([
+    [-122.43, 37.78],
+    [-122.42, 37.785],
+    [-122.41, 37.78],
+    [-122.40, 37.785],
+    [-122.39, 37.78],
+  ]),
+};
+
+featureRenderer.addFeature(routeLine, {
+  strokeColor: [0.9, 0.2, 0.2, 1.0],
+  strokeWidth: 5,
+  strokeCap: "round",
+});
+
+// Second polygon with hole: Golden Gate Park area
+const parkPolygon = {
+  type: "Polygon" as const,
+  coordinates: [
+    // Outer ring
+    convertCoords([
+      [-122.51, 37.77],
+      [-122.45, 37.77],
+      [-122.45, 37.765],
+      [-122.51, 37.765],
+      [-122.51, 37.77],
+    ]),
+    // Inner hole
+    convertCoords([
+      [-122.49, 37.768],
+      [-122.47, 37.768],
+      [-122.47, 37.767],
+      [-122.49, 37.767],
+      [-122.49, 37.768],
+    ]),
+  ],
+};
+
+featureRenderer.addFeature(parkPolygon, {
+  fillColor: [0.2, 0.7, 0.3, 0.5],
+  strokeColor: [0.1, 0.4, 0.2, 1.0],
+  strokeWidth: 2,
+  strokeCap: "butt",
+});
+
+console.log(`Added ${featureRenderer.featureCount} GeoJSON features`);
+
 // Start centered on San Francisco area
 tessera.camera.centerX = 0.17;
 tessera.camera.centerY = 0.395;
-tessera.camera.zoom = 10;
+tessera.camera.zoom = 12;
+
+// Override render to include features
+const originalRender = tessera.render.bind(tessera);
+tessera.render = function () {
+  originalRender();
+
+  // Render features on top of tiles
+  const matrix = this.camera.getMatrix(this.canvas.width, this.canvas.height);
+  featureRenderer.render(matrix, this.canvas.width, this.canvas.height);
+};
 
 // Start render loop
 tessera.start();
@@ -128,4 +229,6 @@ canvas.addEventListener("touchmove", (e) => {
 canvas.style.cursor = "grab";
 
 console.log("Controls: drag to pan, scroll to zoom");
-console.log(`Camera: center=(${tessera.camera.centerX.toFixed(3)}, ${tessera.camera.centerY.toFixed(3)}), zoom=${tessera.camera.zoom}`);
+console.log(
+  `Camera: center=(${tessera.camera.centerX.toFixed(3)}, ${tessera.camera.centerY.toFixed(3)}), zoom=${tessera.camera.zoom}`
+);
