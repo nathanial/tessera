@@ -534,36 +534,9 @@ tessera.render = function () {
 
     // Render stacked callouts
     if (placement.callouts.length > 0) {
+      // First pass: draw all branching lines (rendered under boxes)
       draw.begin(matrix, w, h);
-
       for (const callout of placement.callouts) {
-        // Draw callout box background
-        const boxTopLeft = screenToWorld(callout.boxX, callout.boxY, matrix, w, h);
-        const boxBottomRight = screenToWorld(
-          callout.boxX + callout.boxWidth,
-          callout.boxY + callout.boxHeight,
-          matrix, w, h
-        );
-
-        draw.fillStyle = [0.1, 0.1, 0.1, 0.85]; // Dark semi-transparent background
-        draw.fillRect(
-          boxTopLeft.worldX,
-          boxTopLeft.worldY,
-          boxBottomRight.worldX - boxTopLeft.worldX,
-          boxBottomRight.worldY - boxTopLeft.worldY
-        );
-
-        // Draw callout box border
-        draw.strokeStyle = [1, 1, 1, 0.6];
-        draw.lineWidth = 1;
-        draw.strokeRect(
-          boxTopLeft.worldX,
-          boxTopLeft.worldY,
-          boxBottomRight.worldX - boxTopLeft.worldX,
-          boxBottomRight.worldY - boxTopLeft.worldY
-        );
-
-        // Draw branching tree from callout box to each aircraft
         const boxCenterX = callout.boxX + callout.boxWidth / 2;
         const boxCenterY = callout.boxY + callout.boxHeight / 2;
         const boxCenter = screenToWorld(boxCenterX, boxCenterY, matrix, w, h);
@@ -587,6 +560,37 @@ tessera.render = function () {
           draw.lineTo(acWorld.worldX, acWorld.worldY);
           draw.stroke();
         }
+      }
+      draw.end();
+
+      // Second pass: draw all callout boxes (rendered on top of lines)
+      draw.begin(matrix, w, h);
+      for (const callout of placement.callouts) {
+        const boxTopLeft = screenToWorld(callout.boxX, callout.boxY, matrix, w, h);
+        const boxBottomRight = screenToWorld(
+          callout.boxX + callout.boxWidth,
+          callout.boxY + callout.boxHeight,
+          matrix, w, h
+        );
+
+        // Draw callout box background
+        draw.fillStyle = [0.1, 0.1, 0.1, 1.0]; // Dark opaque background
+        draw.fillRect(
+          boxTopLeft.worldX,
+          boxTopLeft.worldY,
+          boxBottomRight.worldX - boxTopLeft.worldX,
+          boxBottomRight.worldY - boxTopLeft.worldY
+        );
+
+        // Draw callout box border
+        draw.strokeStyle = [1, 1, 1, 0.6];
+        draw.lineWidth = 1;
+        draw.strokeRect(
+          boxTopLeft.worldX,
+          boxTopLeft.worldY,
+          boxBottomRight.worldX - boxTopLeft.worldX,
+          boxBottomRight.worldY - boxTopLeft.worldY
+        );
 
         // Add text labels inside callout
         const lineHeight = labelFontSize * 1.2;
@@ -596,12 +600,7 @@ tessera.render = function () {
           const textWorld = screenToWorld(callout.boxX + padding, textY, matrix, w, h);
           sdfRenderer.addText(callout.items[i]!.text, textWorld.worldX, textWorld.worldY, scaledLabelStyle);
         }
-
-        // Add "+N more" if there are hidden labels
-        const totalInCluster = callout.items.length; // This is already capped by maxCalloutLabels
-        // Note: we'd need to track the original count to show "+N more"
       }
-
       draw.end();
     }
   }
