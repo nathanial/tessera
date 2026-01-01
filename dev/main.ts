@@ -2,6 +2,8 @@ import {
   Tessera,
   FeatureRenderer,
   InstancedPointRenderer,
+  SDFRenderer,
+  createFontAtlas,
   type PointInstance,
   type PointShape,
   VERSION,
@@ -277,6 +279,55 @@ featureRenderer.addFeature({
 });
 
 console.log(`Added ${featureRenderer.featureCount} GeoJSON features`);
+
+// ============================================
+// SDF TEXT LABELS
+// ============================================
+
+const sdfRenderer = new SDFRenderer(tessera.gl);
+
+// Generate font atlas at runtime
+const fontAtlas = createFontAtlas({
+  fontFamily: "Arial, Helvetica, sans-serif",
+  fontSize: 48,
+  atlasSize: 512,
+});
+
+// Wait for font atlas to load, then add text labels
+let textReady = false;
+fontAtlas.ready.then(() => {
+  sdfRenderer.loadFontAtlas(fontAtlas.metadata, fontAtlas.image);
+
+  // Neighborhood labels
+  const labels: Array<{ text: string; lng: number; lat: number; size: number; color: [number, number, number, number] }> = [
+    { text: "Financial District", lng: -122.400, lat: 37.790, size: 14, color: [0.1, 0.2, 0.5, 1] },
+    { text: "SOMA", lng: -122.402, lat: 37.777, size: 14, color: [0.4, 0.1, 0.5, 1] },
+    { text: "Mission", lng: -122.415, lat: 37.757, size: 14, color: [0.6, 0.3, 0.0, 1] },
+    { text: "Golden Gate Park", lng: -122.480, lat: 37.770, size: 12, color: [0.1, 0.4, 0.1, 1] },
+    { text: "Marina", lng: -122.435, lat: 37.800, size: 12, color: [0.0, 0.4, 0.4, 1] },
+    { text: "Presidio", lng: -122.462, lat: 37.795, size: 12, color: [0.05, 0.25, 0.1, 1] },
+    // Transit labels
+    { text: "BART", lng: -122.365, lat: 37.778, size: 11, color: [0.0, 0.2, 0.6, 1] },
+    { text: "Muni", lng: -122.385, lat: 37.792, size: 11, color: [0.7, 0.1, 0.1, 1] },
+    { text: "Cable Car", lng: -122.398, lat: 37.773, size: 10, color: [0.8, 0.5, 0.0, 1] },
+    // City label
+    { text: "San Francisco", lng: -122.420, lat: 37.805, size: 18, color: [0.2, 0.2, 0.2, 1] },
+  ];
+
+  for (const label of labels) {
+    const [x, y] = lngLatToWorld(label.lng, label.lat);
+    sdfRenderer.addText(label.text, x, y, {
+      fontSize: label.size,
+      color: label.color,
+      align: "center",
+      haloColor: [1, 1, 1, 0.8],
+      haloWidth: 2,
+    });
+  }
+
+  textReady = true;
+  console.log(`Added ${labels.length} text labels`);
+});
 
 // ============================================
 // INSTANCED POINTS - Multiple shape types
@@ -608,6 +659,11 @@ tessera.render = function () {
   squareRenderer.render(matrix, w, h);    // Wandering
   triangleRenderer.render(matrix, w, h);  // Pulsing
   diamondRenderer.render(matrix, w, h);   // Orbiting + shimmer
+
+  // Render text labels (on top of everything)
+  if (textReady) {
+    sdfRenderer.render(matrix, w, h);
+  }
 
   // Request next frame to keep animation running
   this.requestRender();

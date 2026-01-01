@@ -29,7 +29,7 @@ export { InstancedPointRenderer, createShapeGeometry } from "./instanced/index";
 export type { PointShape, PointInstance, ShapeGeometry } from "./instanced/index";
 
 // Phase 3: SDF Text & Icons
-export { SDFRenderer, TextLayout } from "./sdf/index";
+export { SDFRenderer, TextLayout, createFontAtlas } from "./sdf/index";
 export type {
   FontAtlasMetadata,
   IconAtlasMetadata,
@@ -39,4 +39,6 @@ export type {
   IconStyle,
   TextMeasurement,
   LayoutOptions,
+  FontAtlasOptions,
+  GeneratedFontAtlas,
 } from "./sdf/index";

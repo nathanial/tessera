@@ -6,6 +6,7 @@
 
 export { SDFRenderer } from "./SDFRenderer";
 export { TextLayout, type TextMeasurement, type LayoutOptions } from "./TextLayout";
+export { createFontAtlas, type FontAtlasOptions, type GeneratedFontAtlas } from "./createFontAtlas";
 export {
   DEFAULT_TEXT_STYLE,
   DEFAULT_ICON_STYLE,

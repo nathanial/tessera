@@ -46,6 +46,8 @@ export class SDFRenderer {
   private program: WebGLProgram;
   private uniforms: {
     matrix: WebGLUniformLocation;
+    viewportWidth: WebGLUniformLocation;
+    viewportHeight: WebGLUniformLocation;
     atlasTexture: WebGLUniformLocation;
     color: WebGLUniformLocation;
     opacity: WebGLUniformLocation;
@@ -86,6 +88,8 @@ export class SDFRenderer {
     // Get uniform locations
     this.uniforms = {
       matrix: gl.getUniformLocation(this.program, "u_matrix")!,
+      viewportWidth: gl.getUniformLocation(this.program, "u_viewportWidth")!,
+      viewportHeight: gl.getUniformLocation(this.program, "u_viewportHeight")!,
       atlasTexture: gl.getUniformLocation(this.program, "u_atlasTexture")!,
       color: gl.getUniformLocation(this.program, "u_color")!,
       opacity: gl.getUniformLocation(this.program, "u_opacity")!,
@@ -230,6 +234,11 @@ export class SDFRenderer {
 
   /**
    * Build text geometry from labels.
+   *
+   * Vertex format: anchor (2) + offset (2) + texCoord (2) = 6 floats = 24 bytes
+   * - anchor: world-space position
+   * - offset: pixel-space offset from anchor
+   * - texCoord: UV coordinates in atlas
    */
   private buildTextGeometry(): void {
     if (!this.fontAtlas || this.textLabels.length === 0) {
@@ -245,10 +254,10 @@ export class SDFRenderer {
 
     for (const label of this.textLabels) {
       const scale = label.style.fontSize / metadata.size;
-      let cursorX = label.position[0];
-      const cursorY = label.position[1];
+      const anchorX = label.position[0];
+      const anchorY = label.position[1];
 
-      // Calculate text width for alignment
+      // Calculate text width in pixels for alignment
       let textWidth = 0;
       for (let i = 0; i < label.text.length; i++) {
         const charCode = label.text.charCodeAt(i);
@@ -258,12 +267,16 @@ export class SDFRenderer {
         }
       }
 
-      // Adjust starting position for alignment
+      // Calculate starting pixel offset for alignment
+      let offsetStartX = 0;
       if (label.style.align === "center") {
-        cursorX -= textWidth / 2;
+        offsetStartX = -textWidth / 2;
       } else if (label.style.align === "right") {
-        cursorX -= textWidth;
+        offsetStartX = -textWidth;
       }
+
+      // Current pixel offset from anchor
+      let pixelOffsetX = offsetStartX;
 
       // Generate quads for each character
       for (let i = 0; i < label.text.length; i++) {
@@ -271,11 +284,11 @@ export class SDFRenderer {
         const glyph = metadata.glyphs[charCode];
         if (!glyph) continue;
 
-        // Quad positions
-        const x0 = cursorX + glyph.xOffset * scale;
-        const y0 = cursorY + glyph.yOffset * scale;
-        const x1 = x0 + glyph.width * scale;
-        const y1 = y0 + glyph.height * scale;
+        // Pixel offsets for quad corners (relative to anchor)
+        const ox0 = pixelOffsetX + glyph.xOffset * scale;
+        const oy0 = glyph.yOffset * scale;
+        const ox1 = ox0 + glyph.width * scale;
+        const oy1 = oy0 + glyph.height * scale;
 
         // UV coordinates (normalized 0-1)
         const u0 = glyph.x / metadata.atlasWidth;
@@ -283,11 +296,11 @@ export class SDFRenderer {
         const u1 = (glyph.x + glyph.width) / metadata.atlasWidth;
         const v1 = (glyph.y + glyph.height) / metadata.atlasHeight;
 
-        // Add 4 vertices per glyph (x, y, u, v)
-        vertices.push(x0, y0, u0, v0);
-        vertices.push(x1, y0, u1, v0);
-        vertices.push(x0, y1, u0, v1);
-        vertices.push(x1, y1, u1, v1);
+        // Add 4 vertices per glyph: (anchorX, anchorY, offsetX, offsetY, u, v)
+        vertices.push(anchorX, anchorY, ox0, oy0, u0, v0);
+        vertices.push(anchorX, anchorY, ox1, oy0, u1, v0);
+        vertices.push(anchorX, anchorY, ox0, oy1, u0, v1);
+        vertices.push(anchorX, anchorY, ox1, oy1, u1, v1);
 
         // Add 2 triangles (6 indices) per glyph
         const base = vertexCount;
@@ -295,12 +308,13 @@ export class SDFRenderer {
         indices.push(base + 1, base + 3, base + 2);
         vertexCount += 4;
 
-        // Advance cursor
-        cursorX += glyph.xAdvance * scale;
+        // Advance cursor in pixel space
+        pixelOffsetX += glyph.xAdvance * scale;
       }
     }
 
-    // Create geometry
+    // Create geometry with new vertex format
+    // Stride: 6 floats * 4 bytes = 24 bytes
     this.textGeometry?.destroy();
     if (vertices.length > 0) {
       this.textGeometry = new Geometry(this.gl, {
@@ -310,8 +324,9 @@ export class SDFRenderer {
             ? new Uint32Array(indices)
             : new Uint16Array(indices),
         attributes: [
-          { location: 0, size: 2, stride: 16, offset: 0 }, // a_position
-          { location: 1, size: 2, stride: 16, offset: 8 }, // a_texCoord
+          { location: 0, size: 2, stride: 24, offset: 0 },  // a_anchor
+          { location: 1, size: 2, stride: 24, offset: 8 },  // a_offset
+          { location: 2, size: 2, stride: 24, offset: 16 }, // a_texCoord
         ],
       });
     }
@@ -321,6 +336,8 @@ export class SDFRenderer {
 
   /**
    * Build icon geometry.
+   *
+   * Vertex format: anchor (2) + offset (2) + texCoord (2) = 6 floats = 24 bytes
    */
   private buildIconGeometry(): void {
     if (!this.iconAtlas || this.icons.length === 0) {
@@ -338,16 +355,16 @@ export class SDFRenderer {
       const iconMeta = metadata.icons[icon.iconId];
       if (!iconMeta) continue;
 
+      const anchorX = icon.position[0];
+      const anchorY = icon.position[1];
+
       const scale = icon.style.size / Math.max(iconMeta.width, iconMeta.height);
       const halfW = (iconMeta.width * scale) / 2;
       const halfH = (iconMeta.height * scale) / 2;
 
-      // Apply anchor offset
-      const offsetX = (iconMeta.anchorX - 0.5) * iconMeta.width * scale;
-      const offsetY = (iconMeta.anchorY - 0.5) * iconMeta.height * scale;
-
-      const cx = icon.position[0] + offsetX;
-      const cy = icon.position[1] + offsetY;
+      // Apply anchor offset in pixels
+      const centerOffsetX = (iconMeta.anchorX - 0.5) * iconMeta.width * scale;
+      const centerOffsetY = (iconMeta.anchorY - 0.5) * iconMeta.height * scale;
 
       // Apply rotation
       const cos = Math.cos(icon.style.rotation);
@@ -359,7 +376,7 @@ export class SDFRenderer {
       const u1 = (iconMeta.x + iconMeta.width) / metadata.atlasWidth;
       const v1 = (iconMeta.y + iconMeta.height) / metadata.atlasHeight;
 
-      // Generate 4 corner vertices with rotation
+      // Generate 4 corner vertices with rotation (all in pixel space)
       const cornerData: [number, number, number, number][] = [
         [-halfW, -halfH, u0, v0],
         [halfW, -halfH, u1, v0],
@@ -368,9 +385,11 @@ export class SDFRenderer {
       ];
 
       for (const [lx, ly, u, v] of cornerData) {
-        const rx = cos * lx - sin * ly + cx;
-        const ry = sin * lx + cos * ly + cy;
-        vertices.push(rx, ry, u, v);
+        // Rotate corner offset
+        const rx = cos * lx - sin * ly + centerOffsetX;
+        const ry = sin * lx + cos * ly + centerOffsetY;
+        // Store: anchor (world), offset (pixels), texCoord
+        vertices.push(anchorX, anchorY, rx, ry, u, v);
       }
 
       const base = vertexCount;
@@ -379,7 +398,7 @@ export class SDFRenderer {
       vertexCount += 4;
     }
 
-    // Create geometry
+    // Create geometry with new vertex format
     this.iconGeometry?.destroy();
     if (vertices.length > 0) {
       this.iconGeometry = new Geometry(this.gl, {
@@ -389,8 +408,9 @@ export class SDFRenderer {
             ? new Uint32Array(indices)
             : new Uint16Array(indices),
         attributes: [
-          { location: 0, size: 2, stride: 16, offset: 0 }, // a_position
-          { location: 1, size: 2, stride: 16, offset: 8 }, // a_texCoord
+          { location: 0, size: 2, stride: 24, offset: 0 },  // a_anchor
+          { location: 1, size: 2, stride: 24, offset: 8 },  // a_offset
+          { location: 2, size: 2, stride: 24, offset: 16 }, // a_texCoord
         ],
       });
     }
@@ -423,6 +443,8 @@ export class SDFRenderer {
 
     gl.useProgram(this.program);
     gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
+    gl.uniform1f(this.uniforms.viewportWidth, viewportWidth);
+    gl.uniform1f(this.uniforms.viewportHeight, viewportHeight);
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.uniforms.atlasTexture, 0);
 
