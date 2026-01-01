@@ -9,6 +9,7 @@ console.log(`Tessera v${VERSION}`);
 // ============================================
 
 const LABEL_CELL_SIZE = 120; // Grid cell size in pixels for clustering
+let DEBUG_SHOW_GRID = false; // Toggle with 'G' key
 
 interface ClusterableItem {
   x: number;
@@ -40,6 +41,33 @@ function worldToScreen(
   const screenY = (1 - clipY) * 0.5 * viewportHeight; // Y flipped
 
   return { screenX, screenY };
+}
+
+/** Convert screen pixels to world coordinates (inverse of worldToScreen) */
+function screenToWorld(
+  screenX: number,
+  screenY: number,
+  matrix: Float32Array,
+  viewportWidth: number,
+  viewportHeight: number
+): { worldX: number; worldY: number } {
+  // Screen to clip space
+  const clipX = (screenX / viewportWidth) * 2 - 1;
+  const clipY = 1 - (screenY / viewportHeight) * 2; // Y flipped
+
+  // Invert 2x2 part of matrix (ignoring translation for now)
+  // matrix is [a, b, 0, c, d, 0, tx, ty, 1] in column-major
+  // For our camera matrix: a=scale, b=0, c=0, d=-scale, tx, ty
+  const a = matrix[0], b = matrix[3];
+  const c = matrix[1], d = matrix[4];
+  const tx = matrix[6], ty = matrix[7];
+
+  // Solve: clipX = a*x + b*y + tx, clipY = c*x + d*y + ty
+  const det = a * d - b * c;
+  const worldX = (d * (clipX - tx) - b * (clipY - ty)) / det;
+  const worldY = (-c * (clipX - tx) + a * (clipY - ty)) / det;
+
+  return { worldX, worldY };
 }
 
 /** Group aircraft into spatial bins for label clustering */
@@ -441,6 +469,56 @@ tessera.render = function () {
     cachedGridOffset = gridOffset;
   }
 
+  // Debug: draw the spatial binning grid
+  if (DEBUG_SHOW_GRID) {
+    draw.begin(matrix, w, h);
+    draw.strokeStyle = [1, 0, 1, 0.5]; // Magenta, semi-transparent
+    draw.lineWidth = 1;
+
+    // Use the same grid offset as clustering
+    const effectiveOffset = isZooming && cachedGridOffset ? cachedGridOffset : gridOffset;
+
+    // Draw vertical lines
+    for (let screenX = effectiveOffset.x; screenX <= w; screenX += LABEL_CELL_SIZE) {
+      const top = screenToWorld(screenX, 0, matrix, w, h);
+      const bottom = screenToWorld(screenX, h, matrix, w, h);
+      draw.beginPath();
+      draw.moveTo(top.worldX, top.worldY);
+      draw.lineTo(bottom.worldX, bottom.worldY);
+      draw.stroke();
+    }
+    // Draw lines going left from offset
+    for (let screenX = effectiveOffset.x - LABEL_CELL_SIZE; screenX >= 0; screenX -= LABEL_CELL_SIZE) {
+      const top = screenToWorld(screenX, 0, matrix, w, h);
+      const bottom = screenToWorld(screenX, h, matrix, w, h);
+      draw.beginPath();
+      draw.moveTo(top.worldX, top.worldY);
+      draw.lineTo(bottom.worldX, bottom.worldY);
+      draw.stroke();
+    }
+
+    // Draw horizontal lines
+    for (let screenY = effectiveOffset.y; screenY <= h; screenY += LABEL_CELL_SIZE) {
+      const left = screenToWorld(0, screenY, matrix, w, h);
+      const right = screenToWorld(w, screenY, matrix, w, h);
+      draw.beginPath();
+      draw.moveTo(left.worldX, left.worldY);
+      draw.lineTo(right.worldX, right.worldY);
+      draw.stroke();
+    }
+    // Draw lines going up from offset
+    for (let screenY = effectiveOffset.y - LABEL_CELL_SIZE; screenY >= 0; screenY -= LABEL_CELL_SIZE) {
+      const left = screenToWorld(0, screenY, matrix, w, h);
+      const right = screenToWorld(w, screenY, matrix, w, h);
+      draw.beginPath();
+      draw.moveTo(left.worldX, left.worldY);
+      draw.lineTo(right.worldX, right.worldY);
+      draw.stroke();
+    }
+
+    draw.end();
+  }
+
   for (const cluster of clusters) {
     const representative = cluster.aircraft[0]!;
     const count = cluster.aircraft.length;
@@ -584,5 +662,14 @@ canvas.addEventListener("touchmove", (e) => {
 
 canvas.style.cursor = "grab";
 
-console.log("Controls: drag to pan, scroll to zoom");
+// Keyboard controls
+window.addEventListener("keydown", (e) => {
+  if (e.key === "g" || e.key === "G") {
+    DEBUG_SHOW_GRID = !DEBUG_SHOW_GRID;
+    console.log(`Debug grid: ${DEBUG_SHOW_GRID ? "ON" : "OFF"}`);
+    tessera.requestRender();
+  }
+});
+
+console.log("Controls: drag to pan, scroll to zoom, G to toggle grid");
 console.log(`Grid: ${GRID.cols}x${GRID.rows} = ${shapes.length} shapes`);
