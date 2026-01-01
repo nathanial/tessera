@@ -93,6 +93,9 @@ for (let row = 0; row < GRID.rows; row++) {
 
 console.log(`Created ${shapes.length} shapes in a ${GRID.cols}x${GRID.rows} grid`);
 
+// Sort shapes by type for optimal batching (8 batches instead of 100k)
+shapes.sort((a, b) => shapeTypes.indexOf(a.shape) - shapeTypes.indexOf(b.shape));
+
 // ============================================
 // PRE-COMPUTED SHAPE TEMPLATES
 // ============================================
