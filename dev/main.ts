@@ -41,7 +41,7 @@ interface GridShape {
   row: number;
   col: number;
   shape: ShapeType;
-  color: [number, number, number];
+  baseHue: number; // 0-1, position-based hue
   size: number;
   rotation: number;
   rotationSpeed: number;
@@ -49,17 +49,31 @@ interface GridShape {
 
 const shapes: GridShape[] = [];
 
-// Color palettes for each shape type
-const palettes: Record<ShapeType, [number, number, number][]> = {
-  circle: [[0.3, 0.5, 0.9], [0.2, 0.4, 0.8], [0.4, 0.6, 1.0], [0.1, 0.3, 0.7]],
-  square: [[0.9, 0.3, 0.3], [0.8, 0.2, 0.2], [1.0, 0.4, 0.4], [0.7, 0.1, 0.1]],
-  triangle: [[0.2, 0.8, 0.5], [0.1, 0.7, 0.4], [0.3, 0.9, 0.6], [0.0, 0.6, 0.3]],
-  diamond: [[0.9, 0.7, 0.2], [0.8, 0.6, 0.1], [1.0, 0.8, 0.3], [0.7, 0.5, 0.0]],
-  pentagon: [[0.7, 0.3, 0.9], [0.6, 0.2, 0.8], [0.8, 0.4, 1.0], [0.5, 0.1, 0.7]],
-  hexagon: [[0.9, 0.5, 0.7], [0.8, 0.4, 0.6], [1.0, 0.6, 0.8], [0.7, 0.3, 0.5]],
-  octagon: [[0.2, 0.7, 0.7], [0.1, 0.6, 0.6], [0.3, 0.8, 0.8], [0.0, 0.5, 0.5]],
-  star: [[0.95, 0.8, 0.2], [0.9, 0.7, 0.1], [1.0, 0.9, 0.3], [0.85, 0.6, 0.0]],
-};
+// HSL to RGB conversion
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  h = h % 1; // Wrap hue to 0-1
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h * 6) % 2 - 1));
+  const m = l - c / 2;
+
+  let r = 0, g = 0, b = 0;
+  if (h < 1/6) { r = c; g = x; b = 0; }
+  else if (h < 2/6) { r = x; g = c; b = 0; }
+  else if (h < 3/6) { r = 0; g = c; b = x; }
+  else if (h < 4/6) { r = 0; g = x; b = c; }
+  else if (h < 5/6) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+
+  return [r + m, g + m, b + m];
+}
+
+// Animated hue offset (updated each frame)
+let hueOffset = 0;
+
+// Animation time for position wave
+let animTime = 0;
+const WAVE_AMPLITUDE = 0.00015; // How far shapes move from grid position
+const WAVE_SPEED = 2.0; // Wave animation speed
 
 const shapeTypes: ShapeType[] = ["circle", "square", "triangle", "diamond", "pentagon", "hexagon", "octagon", "star"];
 
@@ -70,10 +84,8 @@ for (let row = 0; row < GRID.rows; row++) {
     const shapeIndex = (row + col) % shapeTypes.length;
     const shapeType = shapeTypes[shapeIndex]!;
 
-    // Pick color from palette
-    const palette = palettes[shapeType];
-    const colorIndex = (row * GRID.cols + col) % palette.length;
-    const baseColor = palette[colorIndex]!;
+    // Base hue based on diagonal position (creates rainbow sweep)
+    const baseHue = (row + col) / (GRID.rows + GRID.cols);
 
     // Vary size slightly
     const sizeVariation = 0.7 + ((row * col) % 5) * 0.1;
@@ -87,7 +99,7 @@ for (let row = 0; row < GRID.rows; row++) {
       row,
       col,
       shape: shapeType,
-      color: baseColor,
+      baseHue,
       size: SHAPE_SIZE * sizeVariation,
       rotation: 0,
       rotationSpeed,
@@ -203,10 +215,12 @@ tessera.render = function () {
   const dt = (now - lastTime) / 1000;
   lastTime = now;
 
-  // Update rotations
+  // Update rotations, hue offset, and animation time
   for (const shape of shapes) {
     shape.rotation += shape.rotationSpeed * dt;
   }
+  hueOffset += dt * 0.1; // Slow hue animation
+  animTime += dt * WAVE_SPEED;
 
   // Render tiles first
   originalRender();
@@ -226,8 +240,17 @@ tessera.render = function () {
   // Draw all shapes in grid using pre-computed templates
   let culledCount = 0;
   for (const shape of shapes) {
-    const cx = GRID.startX + shape.col * GRID.cellWidth + GRID.cellWidth / 2;
-    const cy = GRID.startY + shape.row * GRID.cellHeight + GRID.cellHeight / 2;
+    // Base grid position
+    const baseCx = GRID.startX + shape.col * GRID.cellWidth + GRID.cellWidth / 2;
+    const baseCy = GRID.startY + shape.row * GRID.cellHeight + GRID.cellHeight / 2;
+
+    // Wave animation: ripple effect based on distance from center
+    const wavePhase = (shape.row + shape.col) * 0.3 + animTime;
+    const waveX = Math.sin(wavePhase) * WAVE_AMPLITUDE;
+    const waveY = Math.cos(wavePhase * 1.3) * WAVE_AMPLITUDE;
+
+    const cx = baseCx + waveX;
+    const cy = baseCy + waveY;
     const r = shape.size; // Bounding radius
 
     // Frustum culling: skip if shape is completely outside view
@@ -240,8 +263,12 @@ tessera.render = function () {
     // Get pre-computed template
     const template = shapeTemplates[shape.shape];
 
+    // Compute color from animated hue
+    const hue = shape.baseHue + hueOffset;
+    const rgb = hslToRgb(hue, 0.8, 0.55);
+
     // Fill using template (no tessellation needed!)
-    draw.fillStyle = [shape.color[0], shape.color[1], shape.color[2], 0.7];
+    draw.fillStyle = [rgb[0], rgb[1], rgb[2], 0.7];
     draw.fillTemplate(
       template.vertices,
       template.indices,

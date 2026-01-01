@@ -38,11 +38,11 @@ export class TileManager {
   /** Carto subdomains for load balancing */
   private static readonly SUBDOMAINS = ["a", "b", "c", "d"];
 
-  /** Get Carto Voyager retina tile URL */
+  /** Get Carto Dark retina tile URL */
   private getTileUrl(z: number, x: number, y: number): string {
     // Round-robin through subdomains based on tile coords
     const subdomain = TileManager.SUBDOMAINS[(x + y) % TileManager.SUBDOMAINS.length]!;
-    return `https://${subdomain}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}@2x.png`;
+    return `https://${subdomain}.basemaps.cartocdn.com/rastertiles/dark_all/${z}/${x}/${y}@2x.png`;
   }
 
   /** Tile size in CSS pixels (512 for @2x retina tiles) */
