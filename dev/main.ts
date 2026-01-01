@@ -10,12 +10,7 @@ console.log(`Tessera v${VERSION}`);
 // LABEL CONFIGURATION
 // ============================================
 
-// Label size scaling (similar to aircraft)
-const LABEL_FULL_SIZE = 18; // Font size at full zoom
-const LABEL_FULL_SIZE_ZOOM = 8; // Zoom level at which labels are full size
-const LABEL_MIN_SIZE = 12; // Minimum font size when zoomed out
-
-// Estimated character width for label sizing
+const LABEL_FONT_SIZE = 18;
 const LABEL_CHAR_WIDTH = 0.55; // Approximate width per character as fraction of font size
 
 /** Convert world coordinates to screen pixels */
@@ -119,7 +114,7 @@ fontAtlas.ready.then(() => {
 
 // Text styling for aircraft labels (fontSize will be scaled dynamically)
 const labelStyle = {
-  fontSize: LABEL_FULL_SIZE,
+  fontSize: LABEL_FONT_SIZE,
   color: [1, 1, 1, 1] as [number, number, number, number],
   haloColor: [0, 0, 0, 0.8] as [number, number, number, number],
   haloWidth: 2,
@@ -128,7 +123,7 @@ const labelStyle = {
 
 // Create label placer for stacked callouts
 const labelPlacer = new LabelPlacer({
-  fontSize: LABEL_FULL_SIZE,
+  fontSize: LABEL_FONT_SIZE,
   charWidth: LABEL_CHAR_WIDTH,
   calloutThreshold: 4,
   maxCalloutLabels: 5,
@@ -462,16 +457,7 @@ tessera.render = function () {
   // Hide labels completely below zoom 5.5
   const showLabels = this.camera.zoom >= 5.5;
 
-  // Scale label font size based on zoom level
-  let labelFontSize = LABEL_FULL_SIZE;
-  if (this.camera.zoom < LABEL_FULL_SIZE_ZOOM) {
-    const t = (this.camera.zoom - 4) / (LABEL_FULL_SIZE_ZOOM - 4);
-    labelFontSize = LABEL_MIN_SIZE + (LABEL_FULL_SIZE - LABEL_MIN_SIZE) * Math.max(0, t);
-  }
-
   if (showLabels) {
-    // Update label placer options for current font size
-    labelPlacer.updateOptions({ fontSize: labelFontSize });
 
     // Convert aircraft to label items
     const labelItems: LabelItem[] = adsbLayer.aircraft
@@ -502,13 +488,10 @@ tessera.render = function () {
     // Place labels with overlap resolution
     const placement = labelPlacer.place(labelItems, worldToScreenFn, w, h, labelOffsetPixels);
 
-    // Create scaled label style for this frame
-    const scaledLabelStyle = { ...labelStyle, fontSize: labelFontSize };
-
     // Render direct labels (no leader line)
     for (const label of placement.directLabels) {
-      const world = screenToWorld(label.screenX, label.screenY + labelFontSize / 2, matrix, w, h);
-      sdfRenderer.addText(label.item.text, world.worldX, world.worldY, scaledLabelStyle);
+      const world = screenToWorld(label.screenX, label.screenY + LABEL_FONT_SIZE / 2, matrix, w, h);
+      sdfRenderer.addText(label.item.text, world.worldX, world.worldY, labelStyle);
     }
 
     // Render leader labels (with leader lines)
@@ -519,7 +502,7 @@ tessera.render = function () {
     for (const label of placement.leaderLabels) {
       // Draw leader line from anchor to label
       const anchorWorld = screenToWorld(label.anchorScreenX, label.anchorScreenY, matrix, w, h);
-      const labelWorld = screenToWorld(label.screenX, label.screenY + labelFontSize / 2, matrix, w, h);
+      const labelWorld = screenToWorld(label.screenX, label.screenY + LABEL_FONT_SIZE / 2, matrix, w, h);
 
       draw.beginPath();
       draw.moveTo(anchorWorld.worldX, anchorWorld.worldY);
@@ -527,7 +510,7 @@ tessera.render = function () {
       draw.stroke();
 
       // Add label text
-      sdfRenderer.addText(label.item.text, labelWorld.worldX, labelWorld.worldY, scaledLabelStyle);
+      sdfRenderer.addText(label.item.text, labelWorld.worldX, labelWorld.worldY, labelStyle);
     }
 
     draw.end();
@@ -593,12 +576,12 @@ tessera.render = function () {
         );
 
         // Add text labels inside callout
-        const lineHeight = labelFontSize * 1.2;
+        const lineHeight = LABEL_FONT_SIZE * 1.2;
         const padding = 4;
         for (let i = 0; i < callout.items.length; i++) {
           const textY = callout.boxY + padding + (i + 0.5) * lineHeight;
           const textWorld = screenToWorld(callout.boxX + padding, textY, matrix, w, h);
-          sdfRenderer.addText(callout.items[i]!.text, textWorld.worldX, textWorld.worldY, scaledLabelStyle);
+          sdfRenderer.addText(callout.items[i]!.text, textWorld.worldX, textWorld.worldY, labelStyle);
         }
       }
       draw.end();
