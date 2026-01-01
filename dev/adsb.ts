@@ -110,29 +110,28 @@ interface SimulatedAircraft extends Aircraft {
 }
 
 /**
- * Calculate heading from one point to another
+ * Calculate heading based on Tessera coordinate movement direction.
+ * This matches the actual screen movement since we use linear interpolation.
+ *
+ * Heading convention: 0 = North (up), π/2 = East (right), π = South (down)
  */
-function calculateHeading(
-  fromLon: number,
-  fromLat: number,
-  toLon: number,
-  toLat: number
+function calculateHeadingFromTessera(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number
 ): number {
-  // Handle longitude wrapping (take shortest path)
-  let dLonDeg = toLon - fromLon;
-  if (dLonDeg > 180) dLonDeg -= 360;
-  if (dLonDeg < -180) dLonDeg += 360;
+  let dx = toX - fromX; // positive = east (right)
+  const dy = toY - fromY; // positive = south (down in Tessera coords)
 
-  const dLon = (dLonDeg * Math.PI) / 180;
-  const lat1 = (fromLat * Math.PI) / 180;
-  const lat2 = (toLat * Math.PI) / 180;
+  // Handle date line wrapping (x wraps at 0/1 boundary)
+  // Take the shortest path around the world
+  if (dx > 0.5) dx -= 1;
+  if (dx < -0.5) dx += 1;
 
-  const y = Math.sin(dLon) * Math.cos(lat2);
-  const x =
-    Math.cos(lat1) * Math.sin(lat2) -
-    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-
-  let heading = Math.atan2(y, x);
+  // atan2(dx, -dy) gives heading where 0 = north, π/2 = east
+  // -dy because north is negative Y in Tessera coords
+  let heading = Math.atan2(dx, -dy);
   if (heading < 0) heading += 2 * Math.PI;
   return heading;
 }
@@ -307,14 +306,10 @@ export class ADSBLayer {
       // Calculate position
       const pos = interpolatePosition(origin, destination, progress);
       const { x, y } = lonLatToTessera(pos.lon, pos.lat);
+      const destCoords = lonLatToTessera(destination.lon, destination.lat);
 
-      // Calculate heading toward destination
-      const heading = calculateHeading(
-        pos.lon,
-        pos.lat,
-        destination.lon,
-        destination.lat
-      );
+      // Calculate heading based on Tessera movement direction
+      const heading = calculateHeadingFromTessera(x, y, destCoords.x, destCoords.y);
 
       // Cruise altitude (varies by route length)
       const distance = calculateDistance(
@@ -427,21 +422,17 @@ export class ADSBLayer {
       ac.lon = pos.lon;
       ac.lat = pos.lat;
 
-      // Update heading toward destination
-      ac.heading = calculateHeading(
-        ac.lon,
-        ac.lat,
-        ac.destination.lon,
-        ac.destination.lat
-      );
-
-      // Update altitude based on flight phase
-      ac.altitude = calculateFlightAltitude(ac.progress, ac.cruiseAltitude);
-
       // Update Tessera coordinates
       const { x, y } = lonLatToTessera(ac.lon, ac.lat);
       ac.x = x;
       ac.y = y;
+
+      // Update heading based on Tessera movement direction
+      const destCoords = lonLatToTessera(ac.destination.lon, ac.destination.lat);
+      ac.heading = calculateHeadingFromTessera(x, y, destCoords.x, destCoords.y);
+
+      // Update altitude based on flight phase
+      ac.altitude = calculateFlightAltitude(ac.progress, ac.cruiseAltitude);
     }
 
     this.updatePublicList();
