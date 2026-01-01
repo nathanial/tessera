@@ -42,35 +42,3 @@ export type {
   FontAtlasOptions,
   GeneratedFontAtlas,
 } from "./sdf/index";
-
-// Phase 4: Coordinate Systems
-export {
-  lngLatToWorld,
-  worldToLngLat,
-  lngLatToWorldArray,
-  clampLatitude,
-  MAX_LATITUDE,
-  worldToTile,
-  worldToTileRelative,
-  tileRelativeToWorld,
-  lngLatToTileRelative,
-  getTileBounds,
-  getTileSize,
-  tilesEqual,
-  tileToString,
-  stringToTile,
-  getTilesInBounds,
-  getCoordsBounds,
-  clipPolygonToTile,
-  clipLineToTile,
-  findPolygonTiles,
-  findLineTiles,
-} from "./projection/index";
-export type {
-  LngLat,
-  WorldCoord,
-  TileKey,
-  TileRelativeCoord,
-  WorldBounds,
-  Coord,
-} from "./projection/index";

@@ -25,14 +25,11 @@
 - [x] **SDF Text** - Signed Distance Field text rendering
 - [x] **SDF Icons** - Crisp icons at any scale
 
-## Phase 4: Coordinate Systems (In Progress)
+## Phase 4: Coordinate Systems
 
-- [x] **Projection Support** - Web Mercator (EPSG:3857) with lngLatToWorld/worldToLngLat
-- [x] **Tile Coordinate Utilities** - worldToTile, worldToTileRelative, tileRelativeToWorld
-- [x] **Tile Clipping** - Sutherland-Hodgman (polygons) and Cohen-Sutherland (lines)
-- [x] **Tile-Relative Matrix** - Camera.getTileRelativeMatrix() for precision-preserving transforms
-- [ ] **Tile-Relative Geometry** - Per-tile geometry storage in FeatureRenderer
-- [ ] **Precision Handling** - Full integration to solve vertex jitter at zoom 19
+- [ ] **Tile Coordinates** - Local coordinate system per tile
+- [ ] **Precision Handling** - Solve vertex jitter at high zoom
+- [ ] **Projection Support** - Web Mercator (EPSG:3857)
 
 ## Phase 5: Interactivity
 

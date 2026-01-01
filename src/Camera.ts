@@ -2,8 +2,7 @@
  * 2D Camera with pan and zoom
  */
 
-import { type Mat3, multiply, translate, scale, create } from "./math/mat3";
-import type { TileKey } from "./projection/types";
+import { type Mat3, multiply, translate, scale } from "./math/mat3";
 
 export class Camera {
   /** Center X in world coordinates (0-1 = one tile at zoom 0) */
@@ -37,73 +36,6 @@ export class Camera {
 
     // Combine: scale * translate
     return multiply(s, t);
-  }
-
-  /**
-   * Get matrix for rendering tile-relative geometry.
-   *
-   * This matrix transforms coordinates in tile-local space (0-1 per tile)
-   * directly to clip space, accounting for:
-   * 1. Tile scale (tile size in world coordinates)
-   * 2. Tile position in world
-   * 3. Camera position and zoom
-   * 4. Viewport dimensions
-   *
-   * This preserves precision at high zoom levels by keeping coordinates
-   * small (0-1 per tile) rather than using global world coordinates.
-   *
-   * @param tile - The tile these coordinates are relative to
-   * @param viewportWidth - Viewport width in pixels
-   * @param viewportHeight - Viewport height in pixels
-   */
-  getTileRelativeMatrix(
-    tile: TileKey,
-    viewportWidth: number,
-    viewportHeight: number
-  ): Mat3 {
-    const numTiles = 1 << tile.z; // 2^zoom
-    const tileWorldSize = 1 / numTiles;
-
-    // Tile origin in world coordinates
-    const tileOriginX = tile.x * tileWorldSize;
-    const tileOriginY = tile.y * tileWorldSize;
-
-    // World size in pixels at current camera zoom
-    const worldSizeInPixels = Camera.TILE_SIZE * Math.pow(2, this.zoom);
-
-    // View dimensions in world coordinates
-    const viewWidth = viewportWidth / worldSizeInPixels;
-    const viewHeight = viewportHeight / worldSizeInPixels;
-
-    // Combined transform: tile-local (0-1) -> clip space (-1 to 1)
-    //
-    // For a point (localX, localY) in tile space:
-    //   worldX = tileOriginX + localX * tileWorldSize
-    //   worldY = tileOriginY + localY * tileWorldSize
-    //
-    // Then camera transform:
-    //   clipX = (worldX - centerX) * (2 / viewWidth)
-    //   clipY = (worldY - centerY) * (-2 / viewHeight)
-    //
-    // Combining:
-    //   clipX = localX * (tileWorldSize * 2 / viewWidth)
-    //         + (tileOriginX - centerX) * (2 / viewWidth)
-
-    const scaleX = (tileWorldSize * 2) / viewWidth;
-    const scaleY = (-tileWorldSize * 2) / viewHeight;
-    const translateX = ((tileOriginX - this.centerX) * 2) / viewWidth;
-    const translateY = (-(tileOriginY - this.centerY) * 2) / viewHeight;
-
-    // Build the matrix directly (row-major, column vectors)
-    // [ scaleX,      0,        0 ]
-    // [ 0,           scaleY,   0 ]
-    // [ translateX,  translateY, 1 ]
-    const m = create();
-    m[0] = scaleX;
-    m[4] = scaleY;
-    m[6] = translateX;
-    m[7] = translateY;
-    return m;
   }
 
   /** Pan the camera by screen pixels */

@@ -4,7 +4,6 @@ import {
   InstancedPointRenderer,
   SDFRenderer,
   createFontAtlas,
-  lngLatToWorldArray,
   type PointInstance,
   type PointShape,
   VERSION,
@@ -19,10 +18,20 @@ const tessera = new Tessera({ canvas });
 const featureRenderer = new FeatureRenderer(tessera.gl);
 
 /**
+ * Convert WGS84 coordinates to Web Mercator (0-1 world space)
+ */
+function lngLatToWorld(lng: number, lat: number): [number, number] {
+  const x = (lng + 180) / 360;
+  const latRad = (lat * Math.PI) / 180;
+  const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
+  return [x, y];
+}
+
+/**
  * Convert a GeoJSON coordinate array from WGS84 to world space
  */
 function convertCoords(coords: number[][]): number[][] {
-  return coords.map(([lng, lat]) => lngLatToWorldArray(lng!, lat!));
+  return coords.map(([lng, lat]) => lngLatToWorld(lng!, lat!));
 }
 
 // ============================================
@@ -454,7 +463,7 @@ fontAtlas.ready.then(() => {
 
   // Store labels for animated rotation
   for (const label of labels) {
-    const [x, y] = lngLatToWorldArray(label.lng, label.lat);
+    const [x, y] = lngLatToWorld(label.lng, label.lat);
     allLabels.push({
       text: label.text,
       x,
@@ -480,7 +489,7 @@ const triangleRenderer = new InstancedPointRenderer(tessera.gl);
 const diamondRenderer = new InstancedPointRenderer(tessera.gl);
 
 // Bay Area center for animations
-const bayAreaCenter = lngLatToWorldArray(-122.38, 37.82);
+const bayAreaCenter = lngLatToWorld(-122.38, 37.82);
 
 // ============================================
 // ANIMATED POINT DATA
@@ -516,7 +525,7 @@ function generateAnimatedPoints(
   sizeRange: [number, number],
   animationType: "wander" | "orbit" | "pulse"
 ): AnimatedPoint[] {
-  const center = lngLatToWorldArray(centerLng, centerLat);
+  const center = lngLatToWorld(centerLng, centerLat);
   const points: AnimatedPoint[] = [];
 
   for (let i = 0; i < count; i++) {
@@ -785,7 +794,7 @@ function updateAnimations(dt: number) {
 
 // Start centered on San Francisco
 // SF coords: -122.42, 37.78 -> world space ~(0.16, 0.386)
-const sfWorld = lngLatToWorldArray(-122.42, 37.78);
+const sfWorld = lngLatToWorld(-122.42, 37.78);
 tessera.camera.centerX = sfWorld[0];
 tessera.camera.centerY = sfWorld[1];
 tessera.camera.zoom = 12;
