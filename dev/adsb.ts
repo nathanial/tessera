@@ -8,7 +8,7 @@
 import { lonLatToTessera } from "../src/index";
 
 // Speed multiplier for visual effect (1 = realistic, higher = faster animation)
-const SPEED_MULTIPLIER = 20;
+const SPEED_MULTIPLIER = 1;
 
 export interface Aircraft {
   icao24: string;

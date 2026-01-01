@@ -2,11 +2,12 @@ import { Tessera, DrawContext, VERSION, lonLatToTessera, SDFRenderer, createFont
 import earcut from "earcut";
 import { ADSBLayer, getAltitudeColor } from "./adsb";
 import { loadStateBorderPoints, type BorderPoint } from "./borders";
+import { LabelPlacer, type LabelItem, type PlacementResult } from "./labels";
 
 console.log(`Tessera v${VERSION}`);
 
 // ============================================
-// LABEL CLUSTERING (Spatial Binning)
+// LABEL CONFIGURATION
 // ============================================
 
 // Label size scaling (similar to aircraft)
@@ -14,27 +15,8 @@ const LABEL_FULL_SIZE = 18; // Font size at full zoom
 const LABEL_FULL_SIZE_ZOOM = 8; // Zoom level at which labels are full size
 const LABEL_MIN_SIZE = 12; // Minimum font size when zoomed out
 
-// Grid cell dimensions scale with font size
-const LABEL_CELL_WIDTH_RATIO = 8;  // Cell width = fontSize * this ratio
-const LABEL_CELL_HEIGHT_RATIO = 2;  // Cell height = fontSize * this ratio
-let DEBUG_SHOW_GRID = false;   // Toggle with 'G' key
-
-// Estimated label dimensions for center-based binning
-const LABEL_AVG_CHARS = 10;    // Average characters in label (e.g., "AAL123 +4")
+// Estimated character width for label sizing
 const LABEL_CHAR_WIDTH = 0.55; // Approximate width per character as fraction of font size
-
-interface ClusterableItem {
-  x: number;
-  y: number;
-  callsign: string | null;
-  icao24: string;
-}
-
-interface LabelCluster {
-  aircraft: ClusterableItem[];
-  screenX: number;
-  screenY: number;
-}
 
 /** Convert world coordinates to screen pixels */
 function worldToScreen(
@@ -112,77 +94,6 @@ function getWrappedX(
   return null; // Not visible at any wrap position
 }
 
-/** Group aircraft into spatial bins for label clustering */
-function clusterLabels(
-  aircraft: ClusterableItem[],
-  matrix: Float32Array,
-  viewportWidth: number,
-  viewportHeight: number,
-  labelOffsetWorld: number,
-  labelFontSize: number,
-  bounds: { left: number; right: number; top: number; bottom: number },
-  fixedGridOffset?: { x: number; y: number }
-): { clusters: LabelCluster[]; gridOffset: { x: number; y: number }; cellWidth: number; cellHeight: number } {
-  const grid = new Map<string, LabelCluster>();
-
-  // Scale cell dimensions with font size
-  const cellWidth = labelFontSize * LABEL_CELL_WIDTH_RATIO;
-  const cellHeight = labelFontSize * LABEL_CELL_HEIGHT_RATIO;
-
-  // Calculate current grid offset from world origin
-  const origin = worldToScreen(0, 0, matrix, viewportWidth, viewportHeight);
-  const currentOffset = {
-    x: ((origin.screenX % cellWidth) + cellWidth) % cellWidth,
-    y: ((origin.screenY % cellHeight) + cellHeight) % cellHeight,
-  };
-
-  // Use fixed offset if provided (for stable clustering during zoom)
-  const gridOffsetX = fixedGridOffset?.x ?? currentOffset.x;
-  const gridOffsetY = fixedGridOffset?.y ?? currentOffset.y;
-
-  // Estimate label width in screen pixels for center-based binning
-  const estLabelWidth = labelFontSize * LABEL_CHAR_WIDTH * LABEL_AVG_CHARS;
-  const halfLabelWidth = estLabelWidth / 2;
-  // Label radius in world units for wrapping check
-  const labelRadiusWorld = (estLabelWidth / viewportWidth) * (bounds.right - bounds.left);
-
-  for (const ac of aircraft) {
-    // Y culling (no wrapping for vertical)
-    if (ac.y < bounds.top || ac.y > bounds.bottom) {
-      continue;
-    }
-
-    // Use LABEL position for binning, not aircraft position
-    // Labels are offset to the right of aircraft
-    const labelX = ac.x + labelOffsetWorld;
-    const labelY = ac.y;
-
-    // Check wrapped X position for visibility
-    const renderLabelX = getWrappedX(labelX, labelRadiusWorld, bounds.left, bounds.right);
-    if (renderLabelX === null) {
-      continue;
-    }
-
-    const { screenX, screenY } = worldToScreen(renderLabelX, labelY, matrix, viewportWidth, viewportHeight);
-
-    // Use label CENTER for cell assignment (improves border behavior)
-    const labelCenterX = screenX + halfLabelWidth;
-    const cellX = Math.floor((labelCenterX - gridOffsetX) / cellWidth);
-    const cellY = Math.floor((screenY - gridOffsetY) / cellHeight);
-    const key = `${cellX}_${cellY}`;
-
-    let cluster = grid.get(key);
-    if (!cluster) {
-      cluster = { aircraft: [], screenX, screenY };
-      grid.set(key, cluster);
-    }
-    // Store wrapped aircraft position for rendering
-    cluster.aircraft.push({ ...ac, x: renderLabelX - labelOffsetWorld });
-  }
-
-  return { clusters: Array.from(grid.values()), gridOffset: currentOffset, cellWidth, cellHeight };
-}
-
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const tessera = new Tessera({ canvas });
 
@@ -209,6 +120,14 @@ const labelStyle = {
   haloWidth: 2,
   align: "left" as const,
 };
+
+// Create label placer for stacked callouts
+const labelPlacer = new LabelPlacer({
+  fontSize: LABEL_FULL_SIZE,
+  charWidth: LABEL_CHAR_WIDTH,
+  calloutThreshold: 4,
+  maxCalloutLabels: 5,
+});
 
 // ============================================
 // SHAPE CONFIGURATION
@@ -406,8 +325,6 @@ tessera.camera.zoom = 8; // Zoomed in to see border shapes
 let lastTime = performance.now();
 
 const originalRender = tessera.render.bind(tessera);
-// Cached grid offset for stable clustering during zoom animation
-let cachedGridOffset: { x: number; y: number } | null = null;
 
 tessera.render = function () {
   // Calculate delta time
@@ -533,7 +450,7 @@ tessera.render = function () {
   draw.end();
 
   // ============================================
-  // DRAW AIRCRAFT LABELS (with spatial clustering)
+  // DRAW AIRCRAFT LABELS (with stacked callouts)
   // ============================================
   sdfRenderer.clearText();
 
@@ -548,101 +465,126 @@ tessera.render = function () {
   }
 
   if (showLabels) {
-    // Compute label offset in world units (offset to the right of aircraft)
-    const labelOffsetWorld = aircraftSize * 1.2;
+    // Update label placer options for current font size
+    labelPlacer.updateOptions({ fontSize: labelFontSize });
 
-    // During zoom animation, use cached grid offset for stable grouping
-    // Labels still move (recalculated each frame) but groupings stay consistent
-    const isZooming = this.camera.isZoomAnimating();
-    const { clusters, gridOffset, cellWidth, cellHeight } = clusterLabels(
-      adsbLayer.aircraft,
-      matrix,
-      w,
-      h,
-      labelOffsetWorld,
-      labelFontSize,
-      bounds,
-      isZooming ? cachedGridOffset ?? undefined : undefined
-    );
+    // Convert aircraft to label items
+    const labelItems: LabelItem[] = adsbLayer.aircraft
+      .filter(ac => {
+        // Y culling
+        if (ac.y < bounds.top || ac.y > bounds.bottom) return false;
+        // X culling with wrapping
+        const renderX = getWrappedX(ac.x, aircraftSize, bounds.left, bounds.right);
+        return renderX !== null;
+      })
+      .map(ac => {
+        const renderX = getWrappedX(ac.x, aircraftSize, bounds.left, bounds.right)!;
+        return {
+          id: ac.icao24,
+          text: ac.callsign || ac.icao24,
+          anchorX: renderX,
+          anchorY: ac.y,
+          priority: ac.callsign ? 1 : 0, // Prioritize aircraft with callsigns
+        };
+      });
 
-    // Cache grid offset when not zooming (for next zoom animation)
-    if (!isZooming) {
-      cachedGridOffset = gridOffset;
-    }
+    // Create world-to-screen converter
+    const worldToScreenFn = (x: number, y: number) => worldToScreen(x, y, matrix, w, h);
 
-    // Debug: draw the spatial binning grid
-    if (DEBUG_SHOW_GRID) {
-      draw.begin(matrix, w, h);
-      draw.strokeStyle = [1, 0, 1, 0.5]; // Magenta, semi-transparent
-      draw.lineWidth = 1;
+    // Compute label offset in pixels (offset to the right of aircraft)
+    const labelOffsetPixels = aircraftSize * pixelsPerWorldUnit * 1.2;
 
-      // Use the same grid offset as clustering
-      const effectiveOffset = isZooming && cachedGridOffset ? cachedGridOffset : gridOffset;
-
-      // Draw vertical lines
-      for (let screenX = effectiveOffset.x; screenX <= w; screenX += cellWidth) {
-        const top = screenToWorld(screenX, 0, matrix, w, h);
-        const bottom = screenToWorld(screenX, h, matrix, w, h);
-        draw.beginPath();
-        draw.moveTo(top.worldX, top.worldY);
-        draw.lineTo(bottom.worldX, bottom.worldY);
-        draw.stroke();
-      }
-      // Draw lines going left from offset
-      for (let screenX = effectiveOffset.x - cellWidth; screenX >= 0; screenX -= cellWidth) {
-        const top = screenToWorld(screenX, 0, matrix, w, h);
-        const bottom = screenToWorld(screenX, h, matrix, w, h);
-        draw.beginPath();
-        draw.moveTo(top.worldX, top.worldY);
-        draw.lineTo(bottom.worldX, bottom.worldY);
-        draw.stroke();
-      }
-
-      // Draw horizontal lines
-      for (let screenY = effectiveOffset.y; screenY <= h; screenY += cellHeight) {
-        const left = screenToWorld(0, screenY, matrix, w, h);
-        const right = screenToWorld(w, screenY, matrix, w, h);
-        draw.beginPath();
-        draw.moveTo(left.worldX, left.worldY);
-        draw.lineTo(right.worldX, right.worldY);
-        draw.stroke();
-      }
-      // Draw lines going up from offset
-      for (let screenY = effectiveOffset.y - cellHeight; screenY >= 0; screenY -= cellHeight) {
-        const left = screenToWorld(0, screenY, matrix, w, h);
-        const right = screenToWorld(w, screenY, matrix, w, h);
-        draw.beginPath();
-        draw.moveTo(left.worldX, left.worldY);
-        draw.lineTo(right.worldX, right.worldY);
-        draw.stroke();
-      }
-
-      draw.end();
-    }
+    // Place labels with overlap resolution
+    const placement = labelPlacer.place(labelItems, worldToScreenFn, w, h, labelOffsetPixels);
 
     // Create scaled label style for this frame
     const scaledLabelStyle = { ...labelStyle, fontSize: labelFontSize };
 
-    for (const cluster of clusters) {
-      const representative = cluster.aircraft[0]!;
-      const count = cluster.aircraft.length;
+    // Render direct labels (no leader line)
+    for (const label of placement.directLabels) {
+      const world = screenToWorld(label.screenX, label.screenY + labelFontSize / 2, matrix, w, h);
+      sdfRenderer.addText(label.item.text, world.worldX, world.worldY, scaledLabelStyle);
+    }
 
-      // Format label: single aircraft shows full label, clusters show "+N"
-      let label: string;
-      if (count === 1) {
-        label = representative.callsign || representative.icao24;
-      } else {
-        const name = representative.callsign || representative.icao24;
-        label = `${name} +${count - 1}`;
+    // Render leader labels (with leader lines)
+    draw.begin(matrix, w, h);
+    draw.strokeStyle = [1, 1, 1, 0.5]; // White, semi-transparent
+    draw.lineWidth = 1;
+
+    for (const label of placement.leaderLabels) {
+      // Draw leader line from anchor to label
+      const anchorWorld = screenToWorld(label.anchorScreenX, label.anchorScreenY, matrix, w, h);
+      const labelWorld = screenToWorld(label.screenX, label.screenY + labelFontSize / 2, matrix, w, h);
+
+      draw.beginPath();
+      draw.moveTo(anchorWorld.worldX, anchorWorld.worldY);
+      draw.lineTo(labelWorld.worldX, labelWorld.worldY);
+      draw.stroke();
+
+      // Add label text
+      sdfRenderer.addText(label.item.text, labelWorld.worldX, labelWorld.worldY, scaledLabelStyle);
+    }
+
+    draw.end();
+
+    // Render stacked callouts
+    if (placement.callouts.length > 0) {
+      draw.begin(matrix, w, h);
+
+      for (const callout of placement.callouts) {
+        // Draw callout box background
+        const boxTopLeft = screenToWorld(callout.boxX, callout.boxY, matrix, w, h);
+        const boxBottomRight = screenToWorld(
+          callout.boxX + callout.boxWidth,
+          callout.boxY + callout.boxHeight,
+          matrix, w, h
+        );
+
+        draw.fillStyle = [0.1, 0.1, 0.1, 0.85]; // Dark semi-transparent background
+        draw.fillRect(
+          boxTopLeft.worldX,
+          boxTopLeft.worldY,
+          boxBottomRight.worldX - boxTopLeft.worldX,
+          boxBottomRight.worldY - boxTopLeft.worldY
+        );
+
+        // Draw callout box border
+        draw.strokeStyle = [1, 1, 1, 0.6];
+        draw.lineWidth = 1;
+        draw.strokeRect(
+          boxTopLeft.worldX,
+          boxTopLeft.worldY,
+          boxBottomRight.worldX - boxTopLeft.worldX,
+          boxBottomRight.worldY - boxTopLeft.worldY
+        );
+
+        // Draw leader line from box to cluster centroid
+        const boxCenterX = callout.boxX + callout.boxWidth / 2;
+        const boxCenterY = callout.boxY + callout.boxHeight / 2;
+        const boxCenter = screenToWorld(boxCenterX, boxCenterY, matrix, w, h);
+        const target = screenToWorld(callout.targetX, callout.targetY, matrix, w, h);
+
+        draw.strokeStyle = [1, 1, 1, 0.5];
+        draw.beginPath();
+        draw.moveTo(boxCenter.worldX, boxCenter.worldY);
+        draw.lineTo(target.worldX, target.worldY);
+        draw.stroke();
+
+        // Add text labels inside callout
+        const lineHeight = labelFontSize * 1.2;
+        const padding = 4;
+        for (let i = 0; i < callout.items.length; i++) {
+          const textY = callout.boxY + padding + (i + 0.5) * lineHeight;
+          const textWorld = screenToWorld(callout.boxX + padding, textY, matrix, w, h);
+          sdfRenderer.addText(callout.items[i]!.text, textWorld.worldX, textWorld.worldY, scaledLabelStyle);
+        }
+
+        // Add "+N more" if there are hidden labels
+        const totalInCluster = callout.items.length; // This is already capped by maxCalloutLabels
+        // Note: we'd need to track the original count to show "+N more"
       }
 
-      // Position label next to representative aircraft
-      sdfRenderer.addText(
-        label,
-        representative.x + labelOffsetWorld,
-        representative.y,
-        scaledLabelStyle
-      );
+      draw.end();
     }
   }
 
@@ -767,14 +709,5 @@ canvas.addEventListener("touchmove", (e) => {
 
 canvas.style.cursor = "grab";
 
-// Keyboard controls
-window.addEventListener("keydown", (e) => {
-  if (e.key === "g" || e.key === "G") {
-    DEBUG_SHOW_GRID = !DEBUG_SHOW_GRID;
-    console.log(`Debug grid: ${DEBUG_SHOW_GRID ? "ON" : "OFF"}`);
-    tessera.requestRender();
-  }
-});
-
-console.log("Controls: drag to pan, scroll to zoom, G to toggle grid");
+console.log("Controls: drag to pan, scroll to zoom");
 console.log("Shapes loaded along US state borders (count will appear when loaded)");
