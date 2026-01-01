@@ -8,3 +8,4 @@ export { DrawContext, type DrawContextOptions } from "./DrawContext";
 export { DrawState, type Color, type LineCap, type LineJoin, type DrawStateValues } from "./DrawState";
 export { DynamicBuffer, type DynamicBufferType } from "./DynamicBuffer";
 export { PathBuilder, type Coord } from "./PathBuilder";
+export { TemplateManager } from "./TemplateManager";

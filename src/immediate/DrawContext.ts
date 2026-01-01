@@ -8,6 +8,7 @@
 import { DrawState, type Color, type LineCap, type LineJoin } from "./DrawState";
 import { DynamicBuffer } from "./DynamicBuffer";
 import { PathBuilder } from "./PathBuilder";
+import { TemplateManager } from "./TemplateManager";
 import { createProgram } from "../shaders/compile";
 import { fillVertexShader, fillFragmentShader } from "../shaders/fill";
 import { strokeVertexShader, strokeFragmentShader } from "../shaders/stroke";
@@ -52,6 +53,9 @@ export class DrawContext {
   private fillIndices: DynamicBuffer;
   private strokeVertices: DynamicBuffer;
   private strokeIndices: DynamicBuffer;
+
+  // Instanced template rendering
+  private templateManager: TemplateManager;
 
   // Attribute locations
   private fillAttribs: {
@@ -135,6 +139,9 @@ export class DrawContext {
     // Create VAOs
     this.fillVao = this.createFillVao();
     this.strokeVao = this.createStrokeVao();
+
+    // Create template manager for instanced rendering
+    this.templateManager = new TemplateManager(this.gl);
   }
 
   private createFillVao(): WebGLVertexArrayObject {
@@ -284,6 +291,9 @@ export class DrawContext {
     this.fillBatches = [];
     this.strokeBatches = [];
 
+    // Reset instanced template manager
+    this.templateManager.reset();
+
     // Reset state
     this.state.reset();
     this.pathBuilder.beginPath();
@@ -309,11 +319,6 @@ export class DrawContext {
     const gl = this.gl;
 
     if (!this.matrix) return;
-
-    // Skip if nothing to draw
-    if (this.fillBatches.length === 0 && this.strokeBatches.length === 0) {
-      return;
-    }
 
     // Enable blending
     gl.enable(gl.BLEND);
@@ -390,6 +395,11 @@ export class DrawContext {
 
       gl.bindVertexArray(null);
     }
+
+    // Render instanced templates (fillTemplate calls)
+    // Note: Templates are rendered after regular fills/strokes.
+    // For mixed rendering with strict z-order, call end() to flush between.
+    this.templateManager.render(this.matrix);
 
     // Clean up GL state
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -544,7 +554,7 @@ export class DrawContext {
 
   /**
    * Fill a pre-tessellated shape template with transformation.
-   * This is much faster than path-based rendering for repeated shapes.
+   * Uses GPU instancing for efficient rendering of many shapes.
    *
    * @param vertices - Unit vertices [x0, y0, x1, y1, ...] (radius 1, centered at origin)
    * @param indices - Triangle indices
@@ -561,37 +571,16 @@ export class DrawContext {
     size: number,
     rotation: number
   ): void {
-    const vertexOffset = this.fillVertices.count / 2;
-    const indexOffset = this.fillIndices.count;
-
-    // Pre-compute rotation
-    const cos = Math.cos(rotation);
-    const sin = Math.sin(rotation);
-
-    // Transform and add vertices
-    const numVerts = vertices.length / 2;
-    for (let i = 0; i < numVerts; i++) {
-      const x = vertices[i * 2]!;
-      const y = vertices[i * 2 + 1]!;
-
-      // Rotate, scale, translate
-      const rx = x * cos - y * sin;
-      const ry = x * sin + y * cos;
-      this.fillVertices.push(cx + rx * size);
-      this.fillVertices.push(cy + ry * size);
-    }
-
-    // Add indices with offset
-    this.fillIndices.pushArrayWithOffset(indices, vertexOffset);
-
-    this.fillBatches.push({
-      type: "fill",
-      color: this.state.getEffectiveFillColor(),
-      vertexOffset,
-      vertexCount: numVerts,
-      indexOffset,
-      indexCount: indices.length,
-    });
+    // Delegate to template manager for GPU instancing
+    this.templateManager.registerInstance(
+      vertices,
+      indices,
+      cx,
+      cy,
+      size,
+      rotation,
+      this.state.getEffectiveFillColor()
+    );
   }
 
   // ==================== GeoJSON Helpers ====================
@@ -669,6 +658,15 @@ export class DrawContext {
     }
   }
 
+  // ==================== Stats ====================
+
+  /**
+   * Get rendering statistics from the last frame.
+   */
+  getStats(): { batches: number; instances: number; templates: number } {
+    return this.templateManager.getStats();
+  }
+
   // ==================== Cleanup ====================
 
   /**
@@ -686,6 +684,8 @@ export class DrawContext {
     this.fillIndices.destroy();
     this.strokeVertices.destroy();
     this.strokeIndices.destroy();
+
+    this.templateManager.destroy();
 
     this.destroyed = true;
   }

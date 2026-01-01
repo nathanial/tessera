@@ -40,6 +40,9 @@ export class Tessera {
   private animationId: number | null = null;
   private needsRender = true;
 
+  // Track DrawContexts for stats aggregation
+  private drawContexts: DrawContext[] = [];
+
   constructor(options: TesseraOptions) {
     this.canvas = options.canvas;
 
@@ -122,7 +125,15 @@ export class Tessera {
     this.frameCount++;
     const now = Date.now();
     if (now - this.lastDebugTime > 1000) {
-      console.log(`[Tessera] frame=${this.frameCount}, tiles=${tiles.length}, zoom=${this.camera.zoom.toFixed(2)}, center=(${this.camera.centerX.toFixed(4)}, ${this.camera.centerY.toFixed(4)})`);
+      // Aggregate stats from all draw contexts
+      let totalBatches = 0;
+      let totalInstances = 0;
+      for (const ctx of this.drawContexts) {
+        const stats = ctx.getStats();
+        totalBatches += stats.batches;
+        totalInstances += stats.instances;
+      }
+      console.log(`[Tessera] frame=${this.frameCount}, tiles=${tiles.length}, batches=${totalBatches}, instances=${totalInstances}, zoom=${this.camera.zoom.toFixed(2)}, center=(${this.camera.centerX.toFixed(4)}, ${this.camera.centerY.toFixed(4)})`);
       if (tiles.length > 0) {
         const t = tiles[0]!;
         console.log(`[Tessera] first tile: z=${t.z}, x=${t.x}, y=${t.y}`);
@@ -226,7 +237,9 @@ export class Tessera {
    * Use this for Canvas 2D-like drawing API.
    */
   createDrawContext(): DrawContext {
-    return new DrawContext({ gl: this.gl });
+    const ctx = new DrawContext({ gl: this.gl });
+    this.drawContexts.push(ctx);
+    return ctx;
   }
 
   /**

@@ -1,4 +1,5 @@
 import { Tessera, DrawContext, VERSION } from "../src/index";
+import earcut from "earcut";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -133,49 +134,21 @@ function generateStarVertices(points: number, innerRatio: number): number[] {
   return verts;
 }
 
-// Tessellate a polygon using fan triangulation (works for convex shapes)
-function fanTessellate(vertexCount: number): number[] {
-  const indices: number[] = [];
-  for (let i = 1; i < vertexCount - 1; i++) {
-    indices.push(0, i, i + 1);
-  }
-  return indices;
+// Helper to create a shape template with earcut tessellation
+function createTemplate(vertices: number[]): ShapeTemplate {
+  return { vertices, indices: earcut(vertices) };
 }
 
-// Pre-compute all shape templates
+// Pre-compute all shape templates (tessellated once at startup)
 const shapeTemplates: Record<ShapeType, ShapeTemplate> = {
-  circle: {
-    vertices: generateCircleVertices(32),
-    indices: fanTessellate(32),
-  },
-  triangle: {
-    vertices: generatePolygonVertices(3, -Math.PI / 2),
-    indices: fanTessellate(3),
-  },
-  square: {
-    vertices: generatePolygonVertices(4, Math.PI / 4),
-    indices: fanTessellate(4),
-  },
-  diamond: {
-    vertices: generatePolygonVertices(4, 0),
-    indices: fanTessellate(4),
-  },
-  pentagon: {
-    vertices: generatePolygonVertices(5, -Math.PI / 2),
-    indices: fanTessellate(5),
-  },
-  hexagon: {
-    vertices: generatePolygonVertices(6, 0),
-    indices: fanTessellate(6),
-  },
-  octagon: {
-    vertices: generatePolygonVertices(8, Math.PI / 8),
-    indices: fanTessellate(8),
-  },
-  star: {
-    vertices: generateStarVertices(5, 0.4),
-    indices: fanTessellate(10),
-  },
+  circle: createTemplate(generateCircleVertices(32)),
+  triangle: createTemplate(generatePolygonVertices(3, -Math.PI / 2)),
+  square: createTemplate(generatePolygonVertices(4, Math.PI / 4)),
+  diamond: createTemplate(generatePolygonVertices(4, 0)),
+  pentagon: createTemplate(generatePolygonVertices(5, -Math.PI / 2)),
+  hexagon: createTemplate(generatePolygonVertices(6, 0)),
+  octagon: createTemplate(generatePolygonVertices(8, Math.PI / 8)),
+  star: createTemplate(generateStarVertices(5, 0.4)),
 };
 
 console.log("Pre-computed shape templates");
