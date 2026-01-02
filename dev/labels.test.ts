@@ -119,7 +119,7 @@ describe("LabelPlacer", () => {
         screenX: x + panX,
         screenY: y + panY,
       });
-      return placer.place(items, worldToScreen, viewportWidth, viewportHeight, 0, gridOffset);
+      return placer.place(items, worldToScreen, viewportWidth, viewportHeight, viewportWidth, gridOffset);
     };
 
     const placementA = placeAt(0, 0);
@@ -148,6 +148,188 @@ describe("LabelPlacer", () => {
       expect(offsetB).toBeDefined();
       expect(Math.abs(offsetA.dx - offsetB!.dx)).toBeLessThan(1);
       expect(Math.abs(offsetA.dy - offsetB!.dy)).toBeLessThan(1);
+    }
+  });
+
+  it("handles many callouts with mixed labels in a large scene", () => {
+    const placer = new LabelPlacer({
+      fontSize: 12,
+      charWidth: 0.5,
+      lineHeight: 1.2,
+      padding: 2,
+      calloutThreshold: 2,
+      calloutReleaseThreshold: 2,
+      maxCalloutLabels: 12,
+      leaderLineMargin: 20,
+      hysteresisMargin: 10,
+    });
+    placer.setMeasureFunction((text, fontSize) => text.length * fontSize * 0.5);
+
+    const clustersX = 10;
+    const clustersY = 10;
+    const labelsPerCluster = 6;
+    const cellSize = placer.getClusterCellSize();
+    const clusterSpacing = Math.ceil(cellSize * 1.05);
+    const clusterOrigin = { x: 200, y: 160 };
+
+    const items: Array<{ id: string; text: string; anchorX: number; anchorY: number }> = [];
+    for (let cy = 0; cy < clustersY; cy++) {
+      for (let cx = 0; cx < clustersX; cx++) {
+        const baseX = clusterOrigin.x + cx * clusterSpacing;
+        const baseY = clusterOrigin.y + cy * clusterSpacing;
+        for (let i = 0; i < labelsPerCluster; i++) {
+          const jitterX = (i % 5) * 2;
+          const jitterY = Math.floor(i / 5) * 2;
+          items.push({
+            id: `cluster-${cx}-${cy}-${i}`,
+            text: `CALLSIGN_${cx}_${cy}_${i}_LONG`,
+            anchorX: baseX + jitterX,
+            anchorY: baseY + jitterY,
+          });
+        }
+      }
+    }
+
+    const sparseCount = 240;
+    for (let i = 0; i < sparseCount; i++) {
+      items.push({
+        id: `sparse-${i}`,
+        text: `S_${i}`,
+        anchorX: 80 + (i % 30) * 60,
+        anchorY: 60 + Math.floor(i / 30) * 50,
+      });
+    }
+
+    const viewportWidth = clusterOrigin.x + (clustersX - 1) * clusterSpacing + 400;
+    const viewportHeight = clusterOrigin.y + (clustersY - 1) * clusterSpacing + 400;
+
+    const gridOffset = { x: 0, y: 0 };
+    const worldToScreen = (x: number, y: number) => ({ screenX: x, screenY: y });
+    const placement = placer.place(items, worldToScreen, viewportWidth, viewportHeight, 0, gridOffset);
+
+    expect(placement.callouts.length).toBeGreaterThanOrEqual(90);
+    expect(placement.directLabels.length + placement.leaderLabels.length).toBeGreaterThanOrEqual(200);
+  });
+
+  it("keeps callout offsets stable when viewport culls labels during pan", () => {
+    const placer = new LabelPlacer({
+      fontSize: 12,
+      charWidth: 0.5,
+      lineHeight: 1.2,
+      padding: 2,
+      calloutThreshold: 2,
+      calloutReleaseThreshold: 2,
+      maxCalloutLabels: 8,
+      leaderLineMargin: 20,
+      hysteresisMargin: 10,
+    });
+    placer.setMeasureFunction((text, fontSize) => text.length * fontSize * 0.5);
+
+    const cellSize = placer.getClusterCellSize();
+    const clustersX = 12;
+    const clustersY = 8;
+    const clusterSpacing = Math.ceil(cellSize * 0.95);
+    const clusterOrigin = { x: 200, y: 160 };
+
+    const items: Array<{ id: string; text: string; anchorX: number; anchorY: number }> = [];
+    for (let cy = 0; cy < clustersY; cy++) {
+      for (let cx = 0; cx < clustersX; cx++) {
+        const baseX = clusterOrigin.x + cx * clusterSpacing;
+        const baseY = clusterOrigin.y + cy * clusterSpacing;
+        for (let i = 0; i < 6; i++) {
+          const jitterX = (i % 3) * 2;
+          const jitterY = Math.floor(i / 3) * 2;
+          items.push({
+            id: `cull-${cx}-${cy}-${i}`,
+            text: `CULL_${cx}_${cy}_${i}`,
+            anchorX: baseX + jitterX,
+            anchorY: baseY + jitterY,
+          });
+        }
+      }
+    }
+
+    const sparseCount = 240;
+    for (let i = 0; i < sparseCount; i++) {
+      items.push({
+        id: `cull-sparse-${i}`,
+        text: `SPARSE_${i}`,
+        anchorX: 200 + (i % 20) * 20,
+        anchorY: 120 + Math.floor(i / 20) * 20,
+      });
+    }
+
+    const viewportWidth = 800;
+    const viewportHeight = 500;
+
+    const snapshot = (
+      placement: ReturnType<LabelPlacer["place"]>,
+      gridOffset: { x: number; y: number }
+    ) => {
+      const map = new Map<string, { dx: number; dy: number }>();
+      for (const callout of placement.callouts) {
+        const key = `${Math.floor((callout.centroidX - gridOffset.x) / cellSize)},${Math.floor((callout.centroidY - gridOffset.y) / cellSize)}`;
+        map.set(key, {
+          dx: callout.boxX - callout.centroidX,
+          dy: callout.boxY - callout.centroidY,
+        });
+      }
+      return map;
+    };
+
+    const placeAt = (panX: number, panY: number) => {
+      const gridOffset = {
+        x: ((panX % cellSize) + cellSize) % cellSize,
+        y: ((panY % cellSize) + cellSize) % cellSize,
+      };
+      const worldToScreen = (x: number, y: number) => ({
+        screenX: x + panX,
+        screenY: y + panY,
+      });
+      const visible = items.filter(item => {
+        const screen = worldToScreen(item.anchorX, item.anchorY);
+        return (
+          screen.screenX >= 0 &&
+          screen.screenX <= viewportWidth &&
+          screen.screenY >= 0 &&
+          screen.screenY <= viewportHeight
+        );
+      });
+      return {
+        placement: placer.place(visible, worldToScreen, viewportWidth, viewportHeight, 0, gridOffset),
+        gridOffset,
+      };
+    };
+
+    const pans = [
+      { x: 0, y: 0 },
+      { x: 40, y: 20 },
+      { x: 80, y: 40 },
+      { x: 120, y: 60 },
+    ];
+
+    let previous = placeAt(pans[0]!.x, pans[0]!.y);
+    let previousSnapshot = snapshot(previous.placement, previous.gridOffset);
+
+    expect(previous.placement.callouts.length).toBeGreaterThanOrEqual(15);
+    expect(previous.placement.directLabels.length + previous.placement.leaderLabels.length).toBeGreaterThanOrEqual(50);
+
+    for (let i = 1; i < pans.length; i++) {
+      const current = placeAt(pans[i]!.x, pans[i]!.y);
+      const currentSnapshot = snapshot(current.placement, current.gridOffset);
+
+      let overlapCount = 0;
+      for (const [key, prevOffset] of previousSnapshot) {
+        const nextOffset = currentSnapshot.get(key);
+        if (!nextOffset) continue;
+        overlapCount++;
+        expect(Math.abs(prevOffset.dx - nextOffset.dx)).toBeLessThan(1);
+        expect(Math.abs(prevOffset.dy - nextOffset.dy)).toBeLessThan(1);
+      }
+
+      expect(overlapCount).toBeGreaterThan(20);
+      previous = current;
+      previousSnapshot = currentSnapshot;
     }
   });
 
