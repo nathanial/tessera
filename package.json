@@ -49,6 +49,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "clipper-lib": "^6.4.2",
     "earcut": "^3.0.2",
     "topojson-client": "^3.1.0"
   }
