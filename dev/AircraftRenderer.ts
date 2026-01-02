@@ -28,7 +28,7 @@ const aircraftVertices = [
 const aircraftIndices = earcut(aircraftVertices);
 
 const SENSOR_CONE_WORLD_SIZE = 0.0003; // World units (0-1)
-const SENSOR_CONE_COLOR: [number, number, number, number] = [0.6, 0.2, 0.9, 0.18];
+const SENSOR_CONE_COLOR: [number, number, number, number] = [0.6, 0.2, 0.9, 0.28];
 
 // ============================================
 // AIRCRAFT RENDERER CLASS
@@ -122,13 +122,14 @@ export class AircraftRenderer {
     renderer: SensorConeRenderer,
     matrix: Float32Array,
     timeSeconds: number,
+    speedMultiplier: number,
     bounds: { left: number; right: number; top: number; bottom: number },
     _aircraftSize: number
   ): number {
     let sensorsDrawn = 0;
     const coneSize = SENSOR_CONE_WORLD_SIZE;
     const coneRadius = coneSize * SENSOR_CONE_UNIT_RADIUS;
-    renderer.begin(matrix, timeSeconds);
+    renderer.begin(matrix, timeSeconds, speedMultiplier);
 
     for (const ac of this.adsbLayer.aircraft) {
       if (ac.y + coneRadius < bounds.top || ac.y - coneRadius > bounds.bottom) {
@@ -138,7 +139,9 @@ export class AircraftRenderer {
       const renderX = getWrappedX(ac.x, coneRadius, bounds.left, bounds.right);
       if (renderX === null) continue;
 
-      renderer.addCone(renderX, ac.y, coneSize, ac.heading, SENSOR_CONE_COLOR);
+      const phaseSeed = parseInt(ac.icao24, 16);
+      const phase = Number.isFinite(phaseSeed) ? (phaseSeed % 997) / 997 : 0;
+      renderer.addCone(renderX, ac.y, coneSize, ac.heading, phase, SENSOR_CONE_COLOR);
       sensorsDrawn++;
     }
 

@@ -225,6 +225,7 @@ tessera.render = function () {
       sensorConeRenderer,
       matrix,
       now / 1000,
+      aircraftRenderer.getSpeedMultiplier(),
       bounds,
       aircraftSize
     );
