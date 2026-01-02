@@ -45,6 +45,16 @@
         flex-wrap: wrap;
         justify-content: flex-end;
       }
+      #selection-help {
+        margin-top: 8px;
+        padding: 6px 8px;
+        background: rgba(0, 0, 0, 0.6);
+        color: #ffffff;
+        font-size: 12px;
+        line-height: 1.4;
+        max-width: 220px;
+        text-align: right;
+      }
       .speed-button {
         padding: 6px 10px;
         border: 2px solid #00d1ff;
@@ -70,6 +80,9 @@
         <button class="speed-button" data-speed="5" type="button">5x</button>
         <button class="speed-button" data-speed="10" type="button">10x</button>
         <button class="speed-button" data-speed="20" type="button">20x</button>
+      </div>
+      <div id="selection-help">
+        Shift + drag to select aircraft. Click empty space to clear selection. Drag to pan.
       </div>
     </div>
     <script type="module" src="./main.ts"></script>
