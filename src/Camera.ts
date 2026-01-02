@@ -16,7 +16,7 @@ export class Camera {
   static readonly TILE_SIZE = 512;
 
   // Inertial zoom animation state
-  private static readonly ZOOM_DECAY = 0.00001;
+  private static readonly ZOOM_DECAY = 0.0000000001; // Faster decay for quicker stop
   private static readonly ZOOM_VELOCITY_THRESHOLD = 0.0001;
 
   private zoomVelocity = 0;

@@ -249,6 +249,14 @@ export class LabelPlacer {
   }
 
   /**
+   * Get the cluster cell size in screen pixels.
+   * Useful for debug visualization.
+   */
+  getClusterCellSize(): number {
+    return this.options.fontSize * 12;
+  }
+
+  /**
    * Place labels with overlap resolution
    */
   place(
@@ -256,7 +264,8 @@ export class LabelPlacer {
     worldToScreen: (x: number, y: number) => { screenX: number; screenY: number },
     viewportWidth: number,
     viewportHeight: number,
-    labelOffsetX: number = 10  // Pixels offset from anchor
+    labelOffsetX: number = 10,  // Pixels offset from anchor
+    gridOffset: { x: number; y: number } = { x: 0, y: 0 }  // Grid offset for stable clustering
   ): PlacementResult {
     this.grid.clear();
     this.newPlacements.clear();
@@ -344,7 +353,8 @@ export class LabelPlacer {
     const { leaderLabels, callouts, newClusterAssignments } = this.resolveDisplaced(
       displaced,
       viewportWidth,
-      viewportHeight
+      viewportHeight,
+      gridOffset
     );
 
     // Update hysteresis state for next frame
@@ -402,21 +412,23 @@ export class LabelPlacer {
   private resolveDisplaced(
     displaced: PlacedLabel[],
     viewportWidth: number,
-    viewportHeight: number
+    viewportHeight: number,
+    gridOffset: { x: number; y: number }
   ): { leaderLabels: PlacedLabel[]; callouts: StackedCallout[]; newClusterAssignments: Map<string, string> } {
     if (displaced.length === 0) {
       return { leaderLabels: [], callouts: [], newClusterAssignments: new Map() };
     }
 
     // Cluster labels using SCREEN-SPACE coordinates (zoom-dependent clustering)
+    // Apply gridOffset to anchor cells to world coordinates for stability
     const clusterGrid = new Map<string, PlacedLabel[]>();
     const clusterCellSize = this.options.fontSize * 12; // Screen pixels
     const newClusterAssignments = new Map<string, string>();
 
     for (const label of displaced) {
-      // Calculate current cell in screen space
-      const cx = Math.floor(label.anchorScreenX / clusterCellSize);
-      const cy = Math.floor(label.anchorScreenY / clusterCellSize);
+      // Calculate current cell in screen space, offset to align with world grid
+      const cx = Math.floor((label.anchorScreenX - gridOffset.x) / clusterCellSize);
+      const cy = Math.floor((label.anchorScreenY - gridOffset.y) / clusterCellSize);
       const currentKey = `${cx},${cy}`;
 
       // Check previous assignment for hysteresis (stability during panning)
@@ -428,8 +440,8 @@ export class LabelPlacer {
         const [prevCxStr, prevCyStr] = prevKey.split(',');
         const prevCx = Number(prevCxStr);
         const prevCy = Number(prevCyStr);
-        const prevCenterX = (prevCx + 0.5) * clusterCellSize;
-        const prevCenterY = (prevCy + 0.5) * clusterCellSize;
+        const prevCenterX = (prevCx + 0.5) * clusterCellSize + gridOffset.x;
+        const prevCenterY = (prevCy + 0.5) * clusterCellSize + gridOffset.y;
 
         const distToPrevCenter = Math.hypot(
           label.anchorScreenX - prevCenterX,

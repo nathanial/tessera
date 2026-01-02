@@ -138,6 +138,9 @@ const labelPlacer = new LabelPlacer({
   maxCalloutLabels: 5,
 });
 
+// Debug grid toggle (press 'G' to toggle)
+let showDebugGrid = false;
+
 // ============================================
 // SHAPE CONFIGURATION
 // ============================================
@@ -332,6 +335,7 @@ tessera.camera.centerY = usCenter.y;
 tessera.camera.zoom = 8; // Zoomed in to see border shapes
 
 let lastTime = performance.now();
+let isZooming = false;
 
 const originalRender = tessera.render.bind(tessera);
 
@@ -341,9 +345,13 @@ tessera.render = function () {
   const dt = (now - lastTime) / 1000;
   lastTime = now;
 
-  // Update inertial zoom animation
-  if (this.camera.updateZoom(dt)) {
+  // Update inertial zoom animation and track zoom state
+  const zoomAnimating = this.camera.updateZoom(dt);
+  if (zoomAnimating) {
+    isZooming = true;
     this.requestRender();
+  } else {
+    isZooming = false;
   }
 
   // Update rotations, hue offset, and animation time
@@ -463,8 +471,8 @@ tessera.render = function () {
   // ============================================
   sdfRenderer.clearText();
 
-  // Hide labels completely below zoom 5.5
-  const showLabels = this.camera.zoom >= 5.5;
+  // Hide labels completely below zoom 5.5 or during zoom animation
+  const showLabels = this.camera.zoom >= 5.5 && !isZooming;
 
   if (showLabels) {
 
@@ -494,8 +502,16 @@ tessera.render = function () {
     // Compute label offset in pixels (offset to the right of aircraft)
     const labelOffsetPixels = aircraftSize * pixelsPerWorldUnit * 1.2;
 
+    // Calculate grid offset to anchor clustering to world coordinates
+    const cellSize = labelPlacer.getClusterCellSize();
+    const origin = worldToScreen(0, 0, matrix, w, h);
+    const gridOffset = {
+      x: ((origin.screenX % cellSize) + cellSize) % cellSize,
+      y: ((origin.screenY % cellSize) + cellSize) % cellSize,
+    };
+
     // Place labels with overlap resolution
-    const placement = labelPlacer.place(labelItems, worldToScreenFn, w, h, labelOffsetPixels);
+    const placement = labelPlacer.place(labelItems, worldToScreenFn, w, h, labelOffsetPixels, gridOffset);
 
     // Render direct labels (no leader line)
     for (const label of placement.directLabels) {
@@ -595,6 +611,42 @@ tessera.render = function () {
       }
       draw.end();
     }
+  }
+
+  // Render debug grid overlay (toggle with 'G' key)
+  if (showDebugGrid) {
+    const cellSize = labelPlacer.getClusterCellSize();
+
+    // Anchor grid to world origin so it pans smoothly with content
+    const origin = worldToScreen(0, 0, matrix, w, h);
+    const offsetX = ((origin.screenX % cellSize) + cellSize) % cellSize;
+    const offsetY = ((origin.screenY % cellSize) + cellSize) % cellSize;
+
+    draw.begin(matrix, w, h);
+    draw.strokeStyle = [1, 1, 0, 0.3]; // Yellow, semi-transparent
+    draw.lineWidth = 1;
+
+    // Draw vertical lines
+    for (let x = offsetX; x <= w; x += cellSize) {
+      const top = screenToWorld(x, 0, matrix, w, h);
+      const bottom = screenToWorld(x, h, matrix, w, h);
+      draw.beginPath();
+      draw.moveTo(top.worldX, top.worldY);
+      draw.lineTo(bottom.worldX, bottom.worldY);
+      draw.stroke();
+    }
+
+    // Draw horizontal lines
+    for (let y = offsetY; y <= h; y += cellSize) {
+      const left = screenToWorld(0, y, matrix, w, h);
+      const right = screenToWorld(w, y, matrix, w, h);
+      draw.beginPath();
+      draw.moveTo(left.worldX, left.worldY);
+      draw.lineTo(right.worldX, right.worldY);
+      draw.stroke();
+    }
+
+    draw.end();
   }
 
   // Render stats overlay in top-left corner
@@ -736,5 +788,14 @@ canvas.addEventListener("touchmove", (e) => {
 
 canvas.style.cursor = "grab";
 
-console.log("Controls: drag to pan, scroll to zoom");
+// Keyboard controls
+window.addEventListener("keydown", (e) => {
+  if (e.key === "g" || e.key === "G") {
+    showDebugGrid = !showDebugGrid;
+    console.log(`Debug grid: ${showDebugGrid ? "ON" : "OFF"}`);
+    tessera.requestRender();
+  }
+});
+
+console.log("Controls: drag to pan, scroll to zoom, G to toggle debug grid");
 console.log("Shapes loaded along US state borders (count will appear when loaded)");
