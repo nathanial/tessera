@@ -86,8 +86,8 @@ export function renderStatsOverlay(
 
   draw.begin(matrix, w, h);
   draw.fillStyle = [0, 0, 0, 1];
-  const bgTopLeft = screenToWorld(0, 0, matrix, w, h);
-  const bgBottomRight = screenToWorld(statsWidth, statsHeight, matrix, w, h);
+  const bgTopLeft = screenToWorld(0, h - statsHeight, matrix, w, h);
+  const bgBottomRight = screenToWorld(statsWidth, h, matrix, w, h);
   draw.fillRect(
     bgTopLeft.worldX,
     bgTopLeft.worldY,
@@ -96,6 +96,6 @@ export function renderStatsOverlay(
   );
   draw.end();
 
-  const statsWorld = screenToWorld(statsPadding, statsHeight - statsPadding, matrix, w, h);
+  const statsWorld = screenToWorld(statsPadding, h - statsPadding, matrix, w, h);
   sdfRenderer.addText(statsText, statsWorld.worldX, statsWorld.worldY, statsStyle);
 }

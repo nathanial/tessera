@@ -26,10 +26,12 @@ import { LabelRenderer } from "./LabelRenderer";
 import {
   clampRatio,
   collectSplitters,
+  collectPaneIds,
   computePaneRects,
   countPanes,
   createLayout,
   findPaneAt,
+  removePane,
   splitLayout,
   type Orientation,
   type PaneRect,
@@ -43,9 +45,15 @@ import {
   renderSelectionBox,
   renderSelectionHighlights,
 } from "./SelectionRenderer";
-import { normalizeRect, projectSelectionItems, selectIdsInRect, type ScreenRect } from "./SelectionUtils";
+import {
+  normalizeRect,
+  projectSelectionItems,
+  selectIdsInRect,
+  wrapWorldXNear,
+  type ScreenRect,
+} from "./SelectionUtils";
 import { TrailRenderer } from "./TrailRenderer";
-import { screenToWorld } from "./CoordinateUtils";
+import { screenToWorld, worldToScreen } from "./CoordinateUtils";
 import { renderDebugGrid, renderStatsOverlay } from "./UIController";
 
 console.log(`Tessera v${VERSION}`);
@@ -79,6 +87,11 @@ interface PaneState {
   id: string;
   camera: Camera;
   isZooming: boolean;
+  showLabels: boolean;
+  showGroups: boolean;
+  showSensors: boolean;
+  showTrails: boolean;
+  showAreas: boolean;
 }
 
 const ROOT_PANE_ID = "pane-0";
@@ -93,15 +106,27 @@ let measureFn: ((text: string, fontSize: number) => number) | null = null;
 
 const createPaneState = (id: string, sourceId?: string) => {
   const camera = new Camera();
+  const defaults = {
+    showLabels: true,
+    showGroups: true,
+    showSensors: true,
+    showTrails: true,
+    showAreas: true,
+  };
   if (sourceId) {
     const source = paneStates.get(sourceId);
     if (source) {
       camera.centerX = source.camera.centerX;
       camera.centerY = source.camera.centerY;
       camera.zoom = source.camera.zoom;
+      defaults.showLabels = source.showLabels;
+      defaults.showGroups = source.showGroups;
+      defaults.showSensors = source.showSensors;
+      defaults.showTrails = source.showTrails;
+      defaults.showAreas = source.showAreas;
     }
   }
-  paneStates.set(id, { id, camera, isZooming: false });
+  paneStates.set(id, { id, camera, isZooming: false, ...defaults });
 };
 
 const getLabelRenderer = (paneId: string) => {
@@ -133,6 +158,11 @@ const layoutCache = {
 };
 
 const SPLITTER_THICKNESS = 8;
+const SPLITTER_DRAW_THICKNESS = 6;
+const SPLITTER_COLOR: [number, number, number, number] = [0.0, 0.95, 0.85, 0.9];
+
+const getScreenMatrix = (width: number, height: number) =>
+  new Float32Array([2 / width, 0, 0, 0, -2 / height, 0, -1, 1, 1]);
 
 const updateLayoutCache = () => {
   layoutCache.rects.clear();
@@ -148,7 +178,7 @@ const getPaneContext: PaneContextProvider = (screenX, screenY, paneId) => {
   const targetId = paneId ?? findPaneAt(layout, rootRect, screenX, screenY);
   if (!targetId) return null;
   if (!paneId) {
-    activePaneId = targetId;
+    setActivePane(targetId);
   }
   const rect = layoutCache.rects.get(targetId);
   if (!rect) return null;
@@ -173,56 +203,160 @@ setupEditableAreasControls(canvas, aircraftRenderer, editableAreasState, getPane
   tessera.requestRender()
 );
 
-const labelToggleButton = document.getElementById("toggle-labels") as HTMLButtonElement | null;
-let showLabels = true;
-if (labelToggleButton) {
-  labelToggleButton.addEventListener("click", () => {
-    showLabels = !showLabels;
-    labelToggleButton.textContent = showLabels ? "Labels: On" : "Labels: Off";
-  });
-}
+const paneUiLayer = document.getElementById("pane-ui-layer") as HTMLDivElement | null;
 
-const groupToggleButton = document.getElementById("toggle-groups") as HTMLButtonElement | null;
-let showGroups = true;
-if (groupToggleButton) {
-  groupToggleButton.addEventListener("click", () => {
-    showGroups = !showGroups;
-    groupToggleButton.textContent = showGroups ? "Groups: On" : "Groups: Off";
-  });
-}
+type PaneToggleUI = {
+  root: HTMLDivElement;
+  labels: HTMLButtonElement;
+  groups: HTMLButtonElement;
+  sensors: HTMLButtonElement;
+  trails: HTMLButtonElement;
+  areas: HTMLButtonElement;
+};
 
-const sensorToggleButton = document.getElementById("toggle-sensors") as HTMLButtonElement | null;
-let showSensors = true;
-if (sensorToggleButton) {
-  sensorToggleButton.addEventListener("click", () => {
-    showSensors = !showSensors;
-    sensorToggleButton.textContent = showSensors ? "Sensors: On" : "Sensors: Off";
-  });
-}
+const paneToggleUIs = new Map<string, PaneToggleUI>();
+const PANE_UI_PADDING = 10;
 
-const trailsToggleButton = document.getElementById("toggle-trails") as HTMLButtonElement | null;
-let showTrails = true;
-if (trailsToggleButton) {
-  trailsToggleButton.addEventListener("click", () => {
-    showTrails = !showTrails;
-    trailsToggleButton.textContent = showTrails ? "Trails: On" : "Trails: Off";
-  });
-}
+const updatePaneToggleLabels = (paneId: string) => {
+  const pane = paneStates.get(paneId);
+  const ui = paneToggleUIs.get(paneId);
+  if (!pane || !ui) return;
+  ui.labels.textContent = `Labels: ${pane.showLabels ? "On" : "Off"}`;
+  ui.groups.textContent = `Groups: ${pane.showGroups ? "On" : "Off"}`;
+  ui.sensors.textContent = `Sensors: ${pane.showSensors ? "On" : "Off"}`;
+  ui.trails.textContent = `Trails: ${pane.showTrails ? "On" : "Off"}`;
+  ui.areas.textContent = `Areas: ${pane.showAreas ? "On" : "Off"}`;
+};
 
-const areasToggleButton = document.getElementById("toggle-areas") as HTMLButtonElement | null;
-let showAreas = true;
-if (areasToggleButton) {
-  areasToggleButton.addEventListener("click", () => {
-    showAreas = !showAreas;
-    editableAreasState.enabled = showAreas;
-    if (!showAreas) {
+const setActivePane = (paneId: string) => {
+  if (!paneStates.has(paneId)) return;
+  if (activePaneId === paneId) return;
+  activePaneId = paneId;
+  const pane = paneStates.get(paneId);
+  if (pane) {
+    editableAreasState.enabled = pane.showAreas;
+    if (!pane.showAreas) {
+      editableAreasState.activeHandle = null;
+      editableAreasState.dragState = null;
+    }
+  }
+};
+
+const setPaneAreasVisible = (paneId: string, visible: boolean) => {
+  const pane = paneStates.get(paneId);
+  if (!pane) return;
+  pane.showAreas = visible;
+  if (paneId === activePaneId) {
+    editableAreasState.enabled = visible;
+    if (!visible) {
       editableAreasState.selectedId = null;
       editableAreasState.activeHandle = null;
       editableAreasState.dragState = null;
     }
-    areasToggleButton.textContent = showAreas ? "Areas: On" : "Areas: Off";
+  }
+  updatePaneToggleLabels(paneId);
+  tessera.requestRender();
+};
+
+const createPaneToggleUI = (paneId: string) => {
+  if (!paneUiLayer) return;
+  const root = document.createElement("div");
+  root.className = "pane-toggle-group";
+
+  const createButton = (label: string, className: string) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `pane-toggle ${className}`;
+    button.textContent = label;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    return button;
+  };
+
+  const labelsButton = createButton("Labels: On", "toggle-labels");
+  const groupsButton = createButton("Groups: On", "toggle-groups");
+  const sensorsButton = createButton("Sensors: On", "toggle-sensors");
+  const trailsButton = createButton("Trails: On", "toggle-trails");
+  const areasButton = createButton("Areas: On", "toggle-areas");
+
+  labelsButton.addEventListener("click", () => {
+    const pane = paneStates.get(paneId);
+    if (!pane) return;
+    pane.showLabels = !pane.showLabels;
+    updatePaneToggleLabels(paneId);
+    tessera.requestRender();
   });
-}
+
+  groupsButton.addEventListener("click", () => {
+    const pane = paneStates.get(paneId);
+    if (!pane) return;
+    pane.showGroups = !pane.showGroups;
+    updatePaneToggleLabels(paneId);
+    tessera.requestRender();
+  });
+
+  sensorsButton.addEventListener("click", () => {
+    const pane = paneStates.get(paneId);
+    if (!pane) return;
+    pane.showSensors = !pane.showSensors;
+    updatePaneToggleLabels(paneId);
+    tessera.requestRender();
+  });
+
+  trailsButton.addEventListener("click", () => {
+    const pane = paneStates.get(paneId);
+    if (!pane) return;
+    pane.showTrails = !pane.showTrails;
+    updatePaneToggleLabels(paneId);
+    tessera.requestRender();
+  });
+
+  areasButton.addEventListener("click", () => {
+    const pane = paneStates.get(paneId);
+    if (!pane) return;
+    setPaneAreasVisible(paneId, !pane.showAreas);
+  });
+
+  root.append(labelsButton, groupsButton, sensorsButton, trailsButton, areasButton);
+  paneUiLayer.appendChild(root);
+
+  const ui = {
+    root,
+    labels: labelsButton,
+    groups: groupsButton,
+    sensors: sensorsButton,
+    trails: trailsButton,
+    areas: areasButton,
+  };
+  paneToggleUIs.set(paneId, ui);
+  updatePaneToggleLabels(paneId);
+};
+
+const syncPaneToggleUI = () => {
+  if (!paneUiLayer) return;
+  const dpr = window.devicePixelRatio || 1;
+  const paneIds = new Set(layoutCache.rects.keys());
+  for (const [id, ui] of paneToggleUIs) {
+    if (!paneIds.has(id)) {
+      ui.root.remove();
+      paneToggleUIs.delete(id);
+    }
+  }
+  for (const id of paneIds) {
+    if (!paneToggleUIs.has(id)) {
+      createPaneToggleUI(id);
+    }
+  }
+  for (const [id, rect] of layoutCache.rects) {
+    const ui = paneToggleUIs.get(id);
+    if (!ui) continue;
+    ui.root.style.left = `${rect.x / dpr + PANE_UI_PADDING}px`;
+    ui.root.style.top = `${rect.y / dpr + PANE_UI_PADDING}px`;
+    ui.root.style.transform = "";
+  }
+};
 
 const speedButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".speed-button"));
 if (speedButtons.length > 0) {
@@ -249,58 +383,87 @@ if (speedButtons.length > 0) {
   }
 }
 
-const splitHorizontalButton = document.getElementById("split-horizontal") as HTMLButtonElement | null;
-const splitVerticalButton = document.getElementById("split-vertical") as HTMLButtonElement | null;
-const resetPanesButton = document.getElementById("reset-panes") as HTMLButtonElement | null;
-
-const splitActivePane = (orientation: Orientation) => {
+const splitPane = (targetId: string, orientation: Orientation) => {
   if (countPanes(layout) >= MAX_PANES) {
     console.log("Maximum panes reached.");
     return;
   }
   updateLayoutCache();
-  const targetId = layoutCache.rects.has(activePaneId) ? activePaneId : ROOT_PANE_ID;
+  const fallbackId = layoutCache.rects.keys().next().value ?? ROOT_PANE_ID;
+  const resolvedTarget = layoutCache.rects.has(targetId) ? targetId : fallbackId;
   const newPaneId = `pane-${paneCounter++}`;
-  const result = splitLayout(layout, targetId, orientation, newPaneId);
+  const result = splitLayout(layout, resolvedTarget, orientation, newPaneId);
   if (!result.didSplit) return;
   layout = result.node;
-  createPaneState(newPaneId, targetId);
-  activePaneId = newPaneId;
+  createPaneState(newPaneId, resolvedTarget);
+  const targetPane = paneStates.get(resolvedTarget);
+  const targetRect = layoutCache.rects.get(resolvedTarget);
+  const newPane = paneStates.get(newPaneId);
+  if (targetPane && targetRect && newPane) {
+    const bounds = targetPane.camera.getVisibleBounds(targetRect.width, targetRect.height);
+    const viewWidth = bounds.right - bounds.left;
+    const viewHeight = bounds.bottom - bounds.top;
+    newPane.camera.centerX = targetPane.camera.centerX + viewWidth * 0.15;
+    newPane.camera.centerY = targetPane.camera.centerY + viewHeight * 0.1;
+    newPane.camera.zoom = Math.min(Camera.MAX_ZOOM, targetPane.camera.zoom + 0.75);
+  }
+  setActivePane(newPaneId);
+  syncPaneState();
   tessera.requestRender();
 };
 
-const resetPanes = () => {
-  layout = createLayout(ROOT_PANE_ID);
+const removePaneById = (targetId: string) => {
+  if (countPanes(layout) <= 1) return;
+  const result = removePane(layout, targetId);
+  if (!result.removed || !result.node) return;
+  layout = result.node;
+  syncPaneState();
+  tessera.requestRender();
+};
+
+const keepOnlyPane = (targetId: string) => {
+  updateLayoutCache();
+  if (!layoutCache.rects.has(targetId)) return;
+  layout = createLayout(targetId);
+  syncPaneState();
+  tessera.requestRender();
+};
+
+const syncPaneState = () => {
+  const paneIds = new Set<string>();
+  collectPaneIds(layout, paneIds);
   for (const id of Array.from(paneStates.keys())) {
-    if (id !== ROOT_PANE_ID) {
+    if (!paneIds.has(id)) {
       paneStates.delete(id);
+      labelRenderers.delete(id);
     }
   }
-  labelRenderers.clear();
-  activePaneId = ROOT_PANE_ID;
-  tessera.requestRender();
+  for (const id of paneIds) {
+    if (!paneStates.has(id)) {
+      createPaneState(id, activePaneId);
+    }
+  }
+  if (!paneIds.has(activePaneId)) {
+    const nextId = paneIds.values().next().value ?? ROOT_PANE_ID;
+    setActivePane(nextId);
+  }
+  syncPaneToggleUI();
 };
-
-if (splitHorizontalButton) {
-  splitHorizontalButton.addEventListener("click", () => splitActivePane("horizontal"));
-}
-
-if (splitVerticalButton) {
-  splitVerticalButton.addEventListener("click", () => splitActivePane("vertical"));
-}
-
-if (resetPanesButton) {
-  resetPanesButton.addEventListener("click", resetPanes);
-}
 
 const contextMenu = document.getElementById("context-menu") as HTMLDivElement | null;
 const goHereButton = document.getElementById("context-go-here") as HTMLButtonElement | null;
+const splitHorizontalMenu = document.getElementById("context-split-horizontal") as HTMLButtonElement | null;
+const splitVerticalMenu = document.getElementById("context-split-vertical") as HTMLButtonElement | null;
+const removePaneMenu = document.getElementById("context-remove-pane") as HTMLButtonElement | null;
+const isolatePaneMenu = document.getElementById("context-isolate-pane") as HTMLButtonElement | null;
 let contextTargetWorld: { x: number; y: number } | null = null;
+let contextPaneId: string | null = null;
 
 const hideContextMenu = () => {
   if (!contextMenu) return;
   contextMenu.style.display = "none";
   contextTargetWorld = null;
+  contextPaneId = null;
 };
 
 const showContextMenu = (clientX: number, clientY: number) => {
@@ -311,6 +474,12 @@ const showContextMenu = (clientX: number, clientY: number) => {
   if (goHereButton) {
     goHereButton.disabled = selectionState.selectedIds.size === 0;
   }
+  const paneCount = countPanes(layout);
+  const canSplit = paneCount < MAX_PANES;
+  if (splitHorizontalMenu) splitHorizontalMenu.disabled = !contextPaneId || !canSplit;
+  if (splitVerticalMenu) splitVerticalMenu.disabled = !contextPaneId || !canSplit;
+  if (removePaneMenu) removePaneMenu.disabled = !contextPaneId || paneCount <= 1;
+  if (isolatePaneMenu) isolatePaneMenu.disabled = !contextPaneId || paneCount <= 1;
 };
 
 const getPointer = (event: MouseEvent | WheelEvent) => {
@@ -368,12 +537,139 @@ const splitterState = {
   handle: null as SplitterHandle | null,
 };
 
+const viewportDragState = {
+  active: false,
+  targetPaneId: null as string | null,
+  sourcePaneId: null as string | null,
+  lastWorld: { x: 0, y: 0 },
+};
+
+const VIEWPORT_HANDLE_SIZE_PX = 36;
+const VIEWPORT_HANDLE_INSET_PX = 4;
+
+const PANE_VIEW_COLORS: Array<[number, number, number, number]> = [
+  [0.0, 0.95, 0.85, 0.9],
+  [1.0, 0.6, 0.1, 0.9],
+  [0.5, 1.0, 0.2, 0.9],
+  [0.4, 0.6, 1.0, 0.9],
+  [1.0, 0.3, 0.7, 0.9],
+  [0.8, 0.9, 0.2, 0.9],
+  [0.9, 0.5, 0.2, 0.9],
+  [0.4, 1.0, 0.7, 0.9],
+];
+
+const getPaneColor = (paneId: string): [number, number, number, number] => {
+  const numeric = Number(paneId.replace("pane-", ""));
+  if (Number.isFinite(numeric)) {
+    return PANE_VIEW_COLORS[Math.abs(numeric) % PANE_VIEW_COLORS.length]!;
+  }
+  let hash = 0;
+  for (let i = 0; i < paneId.length; i++) {
+    hash = (hash * 31 + paneId.charCodeAt(i)) >>> 0;
+  }
+  return PANE_VIEW_COLORS[hash % PANE_VIEW_COLORS.length]!;
+};
+
+const getViewportBounds = (paneId: string) => {
+  const rect = layoutCache.rects.get(paneId);
+  const pane = paneStates.get(paneId);
+  if (!rect || !pane) return null;
+  return pane.camera.getVisibleBounds(rect.width, rect.height);
+};
+
+const computeViewportRects = () => {
+  return Array.from(layoutCache.rects.entries())
+    .map(([paneId, rect]) => {
+      const pane = paneStates.get(paneId);
+      if (!pane) return null;
+      return {
+        paneId,
+        bounds: pane.camera.getVisibleBounds(rect.width, rect.height),
+        color: getPaneColor(paneId),
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        paneId: string;
+        bounds: { left: number; right: number; top: number; bottom: number };
+        color: [number, number, number, number];
+      } => !!item
+    );
+};
+
+const wrapViewportBounds = (
+  bounds: { left: number; right: number; top: number; bottom: number },
+  referenceX: number
+) => {
+  const center = (bounds.left + bounds.right) / 2;
+  const wrappedCenter = wrapWorldXNear(center, referenceX);
+  const dx = wrappedCenter - center;
+  return {
+    left: bounds.left + dx,
+    right: bounds.right + dx,
+    top: bounds.top,
+    bottom: bounds.bottom,
+  };
+};
+
+const getViewportHandle = (
+  bounds: { left: number; right: number; top: number; bottom: number },
+  worldPerPixel: number
+) => {
+  const size = VIEWPORT_HANDLE_SIZE_PX * worldPerPixel;
+  const centerX = (bounds.left + bounds.right) / 2;
+  const centerY = (bounds.top + bounds.bottom) / 2;
+  return {
+    x: centerX - size / 2,
+    y: centerY - size / 2,
+    size,
+  };
+};
+
+const findViewportHit = (
+  worldX: number,
+  worldY: number,
+  currentPaneId: string,
+  worldPerPixel: number,
+  viewportRects: Array<{
+    paneId: string;
+    bounds: { left: number; right: number; top: number; bottom: number };
+    color: [number, number, number, number];
+  }>,
+  referenceX: number
+) => {
+  let bestId: string | null = null;
+  let bestArea = Infinity;
+  for (const rect of viewportRects) {
+    if (rect.paneId === currentPaneId) continue;
+    const wrappedBounds = wrapViewportBounds(rect.bounds, referenceX);
+    const handle = getViewportHandle(wrappedBounds, worldPerPixel);
+    if (
+      worldX < handle.x ||
+      worldX > handle.x + handle.size ||
+      worldY < handle.y ||
+      worldY > handle.y + handle.size
+    ) {
+      continue;
+    }
+    const area = (wrappedBounds.right - wrappedBounds.left) * (wrappedBounds.bottom - wrappedBounds.top);
+    if (area < bestArea) {
+      bestArea = area;
+      bestId = rect.paneId;
+    }
+  }
+  return bestId;
+};
+
 canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   const { screenX, screenY } = getPointer(event);
   const context = getPaneContext(screenX, screenY);
   if (!context) return;
-  activePaneId = context.paneId;
+  setActivePane(context.paneId);
+  contextPaneId = context.paneId;
   const world = screenToWorld(
     context.localX,
     context.localY,
@@ -406,6 +702,38 @@ if (goHereButton) {
       contextTargetWorld.x,
       contextTargetWorld.y
     );
+    hideContextMenu();
+  });
+}
+
+if (splitHorizontalMenu) {
+  splitHorizontalMenu.addEventListener("click", () => {
+    if (!contextPaneId) return;
+    splitPane(contextPaneId, "horizontal");
+    hideContextMenu();
+  });
+}
+
+if (splitVerticalMenu) {
+  splitVerticalMenu.addEventListener("click", () => {
+    if (!contextPaneId) return;
+    splitPane(contextPaneId, "vertical");
+    hideContextMenu();
+  });
+}
+
+if (removePaneMenu) {
+  removePaneMenu.addEventListener("click", () => {
+    if (!contextPaneId) return;
+    removePaneById(contextPaneId);
+    hideContextMenu();
+  });
+}
+
+if (isolatePaneMenu) {
+  isolatePaneMenu.addEventListener("click", () => {
+    if (!contextPaneId) return;
+    keepOnlyPane(contextPaneId);
     hideContextMenu();
   });
 }
@@ -456,7 +784,33 @@ canvas.addEventListener("mousedown", (event) => {
 
   const context = getPaneContext(screenX, screenY);
   if (!context) return;
-  activePaneId = context.paneId;
+  setActivePane(context.paneId);
+  const worldPoint = screenToWorld(
+    context.localX,
+    context.localY,
+    context.matrix,
+    context.viewportWidth,
+    context.viewportHeight
+  );
+  const worldPerPixel = (context.bounds.right - context.bounds.left) / Math.max(1, context.viewportWidth);
+  const viewportRects = computeViewportRects();
+  const referenceX = (context.bounds.left + context.bounds.right) / 2;
+  const viewportHit = findViewportHit(
+    worldPoint.worldX,
+    worldPoint.worldY,
+    context.paneId,
+    worldPerPixel,
+    viewportRects,
+    referenceX
+  );
+  if (viewportHit) {
+    viewportDragState.active = true;
+    viewportDragState.targetPaneId = viewportHit;
+    viewportDragState.sourcePaneId = context.paneId;
+    viewportDragState.lastWorld = { x: worldPoint.worldX, y: worldPoint.worldY };
+    canvas.style.cursor = "move";
+    return;
+  }
 
   if (event.shiftKey) {
     selectionState.isSelecting = true;
@@ -489,6 +843,30 @@ canvas.addEventListener("mousedown", (event) => {
 
 window.addEventListener("mousemove", (event) => {
   const { screenX, screenY } = getPointer(event);
+
+  if (viewportDragState.active && viewportDragState.targetPaneId && viewportDragState.sourcePaneId) {
+    const context = getPaneContext(screenX, screenY, viewportDragState.sourcePaneId);
+    if (context) {
+      const world = screenToWorld(
+        context.localX,
+        context.localY,
+        context.matrix,
+        context.viewportWidth,
+        context.viewportHeight
+      );
+      const targetPane = paneStates.get(viewportDragState.targetPaneId);
+      if (targetPane) {
+        const dx = world.worldX - viewportDragState.lastWorld.x;
+        const dy = world.worldY - viewportDragState.lastWorld.y;
+        targetPane.camera.centerX += dx;
+        targetPane.camera.centerY += dy;
+        viewportDragState.lastWorld = { x: world.worldX, y: world.worldY };
+        setActivePane(targetPane.id);
+        tessera.requestRender();
+      }
+    }
+    return;
+  }
 
   if (splitterState.active && splitterState.handle) {
     const { node, container } = splitterState.handle;
@@ -554,12 +932,40 @@ window.addEventListener("mousemove", (event) => {
     }
     const context = getPaneContext(screenX, screenY);
     if (context) {
-      activePaneId = context.paneId;
+      setActivePane(context.paneId);
+      const worldPoint = screenToWorld(
+        context.localX,
+        context.localY,
+        context.matrix,
+        context.viewportWidth,
+        context.viewportHeight
+      );
+      const worldPerPixel = (context.bounds.right - context.bounds.left) / Math.max(1, context.viewportWidth);
+      const viewportRects = computeViewportRects();
+      const referenceX = (context.bounds.left + context.bounds.right) / 2;
+      const hit = findViewportHit(
+        worldPoint.worldX,
+        worldPoint.worldY,
+        context.paneId,
+        worldPerPixel,
+        viewportRects,
+        referenceX
+      );
+      if (hit && !splitter) {
+        canvas.style.cursor = "move";
+      }
     }
   }
 });
 
 window.addEventListener("mouseup", (event) => {
+  if (viewportDragState.active) {
+    viewportDragState.active = false;
+    viewportDragState.targetPaneId = null;
+    viewportDragState.sourcePaneId = null;
+    canvas.style.cursor = "grab";
+    return;
+  }
   if (splitterState.active) {
     splitterState.active = false;
     splitterState.handle = null;
@@ -628,7 +1034,7 @@ canvas.addEventListener(
     const { screenX, screenY } = getPointer(event);
     const context = getPaneContext(screenX, screenY);
     if (!context) return;
-    activePaneId = context.paneId;
+    setActivePane(context.paneId);
     const pane = paneStates.get(context.paneId);
     if (!pane) return;
     const delta = -event.deltaY * 0.002;
@@ -686,6 +1092,9 @@ tessera.render = function () {
   aircraftRenderer.update();
 
   updateLayoutCache();
+  syncPaneToggleUI();
+
+  const viewportRects = computeViewportRects();
 
   const gl = this.gl;
   gl.enable(gl.SCISSOR_TEST);
@@ -695,7 +1104,7 @@ tessera.render = function () {
   if (!layoutCache.rects.has(activePaneId)) {
     const firstPane = layoutCache.rects.keys().next().value as string | undefined;
     if (firstPane) {
-      activePaneId = firstPane;
+      setActivePane(firstPane);
     }
   }
 
@@ -744,7 +1153,7 @@ tessera.render = function () {
     borderRenderer.render(draw, bounds);
     draw.end();
 
-    if (showTrails) {
+    if (pane.showTrails) {
       aircraftRenderer.renderTrails(
         trailRenderer,
         matrix,
@@ -754,7 +1163,7 @@ tessera.render = function () {
       );
     }
 
-    if (showSensors) {
+    if (pane.showSensors) {
       aircraftRenderer.renderSensors(
         sensorConeRenderer,
         matrix,
@@ -765,17 +1174,17 @@ tessera.render = function () {
       );
     }
 
-    if (showAreas) {
+    if (pane.showAreas) {
       circleRenderer.begin(matrix, rect.width, rect.height);
     }
 
     draw.begin(matrix, rect.width, rect.height);
-    if (showAreas) {
+    if (pane.showAreas) {
       renderEditableAreas(draw, matrix, rect.width, rect.height, bounds, now / 1000, editableAreasState, circleRenderer);
     }
     draw.end();
 
-    if (showAreas) {
+    if (pane.showAreas) {
       circleRenderer.render();
     }
 
@@ -783,19 +1192,79 @@ tessera.render = function () {
     aircraftRenderer.render(draw, bounds, aircraftSize);
     draw.end();
 
-    const commandLabels = showGroups
+    const commandLabels = pane.showGroups
       ? renderCommandHulls(
-          draw,
-          matrix,
-          rect.width,
-          rect.height,
-          bounds,
+        draw,
+        matrix,
+        rect.width,
+        rect.height,
+        bounds,
           aircraftRenderer,
           aircraftRenderer.getCommandGroups(),
           commandLineRenderer,
-          now / 1000
-        )
+        now / 1000
+      )
       : [];
+
+    if (viewportRects.length > 1) {
+      const referenceX = (bounds.left + bounds.right) / 2;
+      const screenMatrix = getScreenMatrix(rect.width, rect.height);
+      const strokeWidth = 6;
+      draw.begin(screenMatrix, rect.width, rect.height);
+      draw.lineWidth = strokeWidth;
+      for (const viewRect of viewportRects) {
+        const isSelf = viewRect.paneId === paneId;
+        if (isSelf) continue;
+        const isActiveView = viewRect.paneId === activePaneId;
+        const color = viewRect.color;
+        const wrappedBounds = wrapViewportBounds(viewRect.bounds, referenceX);
+        const topLeft = worldToScreen(
+          wrappedBounds.left,
+          wrappedBounds.top,
+          matrix,
+          rect.width,
+          rect.height
+        );
+        const bottomRight = worldToScreen(
+          wrappedBounds.right,
+          wrappedBounds.bottom,
+          matrix,
+          rect.width,
+          rect.height
+        );
+        const rectX = topLeft.screenX;
+        const rectY = topLeft.screenY;
+        const rectW = bottomRight.screenX - topLeft.screenX;
+        const rectH = bottomRight.screenY - topLeft.screenY;
+        draw.strokeStyle = [
+          color[0],
+          color[1],
+          color[2],
+          isActiveView ? Math.min(1, color[3] + 0.2) : 1,
+        ];
+        draw.strokeRect(rectX, rectY, rectW, rectH);
+
+        const centerX = (wrappedBounds.left + wrappedBounds.right) / 2;
+        const centerY = (wrappedBounds.top + wrappedBounds.bottom) / 2;
+        const centerScreen = worldToScreen(centerX, centerY, matrix, rect.width, rect.height);
+        const handleSize = VIEWPORT_HANDLE_SIZE_PX;
+        draw.fillStyle = [color[0], color[1], color[2], 1];
+        draw.fillRect(
+          centerScreen.screenX - handleSize / 2,
+          centerScreen.screenY - handleSize / 2,
+          handleSize,
+          handleSize
+        );
+        draw.strokeStyle = [0, 0, 0, 0.8];
+        draw.strokeRect(
+          centerScreen.screenX - handleSize / 2,
+          centerScreen.screenY - handleSize / 2,
+          handleSize,
+          handleSize
+        );
+      }
+      draw.end();
+    }
 
     renderSelectionHighlights(
       draw,
@@ -812,7 +1281,7 @@ tessera.render = function () {
     );
 
     sdfRenderer.clearText();
-    if (showLabels) {
+    if (pane.showLabels) {
       const labelRenderer = getLabelRenderer(paneId);
       labelRenderer.render(
         draw,
@@ -828,7 +1297,7 @@ tessera.render = function () {
       );
     }
 
-    if (showGroups && commandLabels.length > 0) {
+    if (pane.showGroups && commandLabels.length > 0) {
       const commandLabelStyle = getCommandLabelStyle();
       for (const label of commandLabels) {
         sdfRenderer.addText(label.text, label.x, label.y, commandLabelStyle);
@@ -840,15 +1309,11 @@ tessera.render = function () {
       renderDebugGrid(draw, matrix, rect.width, rect.height, labelRenderer.getClusterCellSize());
     }
 
-    if (paneId === activePaneId) {
-      renderStatsOverlay(draw, sdfRenderer, matrix, rect.width, rect.height, pane.camera.zoom);
-    }
-
     if (selectionState.isSelecting && selectionState.paneId === paneId) {
       renderSelectionBox(draw, matrix, rect.width, rect.height, selectionState);
     }
 
-    if (showAreas && paneId === activePaneId) {
+    if (pane.showAreas && paneId === activePaneId) {
       renderEditableAreaHandles(draw, matrix, rect.width, rect.height, bounds, editableAreasState);
     }
 
@@ -858,6 +1323,24 @@ tessera.render = function () {
   }
 
   gl.disable(gl.SCISSOR_TEST);
+  gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+
+  if (layoutCache.splitters.length > 0) {
+    const screenMatrix = getScreenMatrix(this.canvas.width, this.canvas.height);
+    draw.begin(screenMatrix, this.canvas.width, this.canvas.height);
+    draw.fillStyle = SPLITTER_COLOR;
+    for (const splitter of layoutCache.splitters) {
+      const { rect, node } = splitter;
+      if (node.orientation === "vertical") {
+        const x = rect.x + rect.width / 2 - SPLITTER_DRAW_THICKNESS / 2;
+        draw.fillRect(x, rect.y, SPLITTER_DRAW_THICKNESS, rect.height);
+      } else {
+        const y = rect.y + rect.height / 2 - SPLITTER_DRAW_THICKNESS / 2;
+        draw.fillRect(rect.x, y, rect.width, SPLITTER_DRAW_THICKNESS);
+      }
+    }
+    draw.end();
+  }
 
   this.requestRender();
 };

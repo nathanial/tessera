@@ -21,111 +21,115 @@
         width: 100%;
         height: 100%;
       }
-      #ui-toggle {
+      #pane-ui-layer {
         position: absolute;
-        top: 12px;
-        right: 12px;
-        z-index: 10;
+        inset: 0;
+        pointer-events: none;
+        z-index: 9;
       }
-      #toggle-labels {
-        padding: 8px 12px;
-        border: 2px solid #ffcc00;
+      .pane-toggle-group {
+        position: absolute;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 6px;
+        pointer-events: auto;
+      }
+      .pane-toggle {
+        padding: 4px 8px;
+        border: 1px solid transparent;
+        background: #222222;
+        color: #ffffff;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .pane-toggle.toggle-labels {
+        border-color: #ffcc00;
         background: #ffcc00;
         color: #000000;
-        font-size: 14px;
-        cursor: pointer;
       }
-      #toggle-labels:hover {
+      .pane-toggle.toggle-labels:hover {
         background: #ffb700;
       }
-      #toggle-groups {
-        padding: 8px 12px;
-        border: 2px solid #1fd17c;
+      .pane-toggle.toggle-groups {
+        padding: 4px 8px;
+        border: 1px solid #1fd17c;
         background: #1fd17c;
         color: #000000;
-        font-size: 14px;
+        font-size: 12px;
         cursor: pointer;
       }
-      #toggle-groups:hover {
+      .pane-toggle.toggle-groups:hover {
         background: #12b96c;
       }
-      #toggle-sensors {
-        padding: 8px 12px;
-        border: 2px solid #9b59ff;
+      .pane-toggle.toggle-sensors {
+        padding: 4px 8px;
+        border: 1px solid #9b59ff;
         background: #9b59ff;
         color: #ffffff;
-        font-size: 14px;
+        font-size: 12px;
         cursor: pointer;
       }
-      #toggle-sensors:hover {
+      .pane-toggle.toggle-sensors:hover {
         background: #8a42ff;
       }
-      #toggle-trails {
-        padding: 8px 12px;
-        border: 2px solid #00c6ff;
+      .pane-toggle.toggle-trails {
+        padding: 4px 8px;
+        border: 1px solid #00c6ff;
         background: #00c6ff;
         color: #000000;
-        font-size: 14px;
+        font-size: 12px;
         cursor: pointer;
       }
-      #toggle-trails:hover {
+      .pane-toggle.toggle-trails:hover {
         background: #00b0e3;
       }
-      #toggle-areas {
-        padding: 8px 12px;
-        border: 2px solid #ff9b33;
+      .pane-toggle.toggle-areas {
+        padding: 4px 8px;
+        border: 1px solid #ff9b33;
         background: #ff9b33;
         color: #000000;
-        font-size: 14px;
+        font-size: 12px;
         cursor: pointer;
       }
-      #toggle-areas:hover {
+      .pane-toggle.toggle-areas:hover {
         background: #f0861a;
       }
-      #toggle-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 6px;
-        margin-top: 8px;
-      }
       #speed-controls {
-        margin-top: 8px;
+        margin-top: 0;
         display: flex;
         gap: 6px;
         flex-wrap: wrap;
-        justify-content: flex-end;
+        justify-content: flex-start;
       }
-      #area-controls {
-        margin-top: 8px;
+      #hud-left {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        z-index: 10;
         display: flex;
-        justify-content: flex-end;
-      }
-      #pane-controls {
-        margin-top: 8px;
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
       }
       #selection-help {
-        margin-top: 8px;
+        margin-top: 0;
         padding: 6px 8px;
         background: rgba(0, 0, 0, 0.6);
         color: #ffffff;
         font-size: 12px;
         line-height: 1.4;
         max-width: 220px;
-        text-align: right;
+        text-align: left;
       }
       #context-help {
-        margin-top: 6px;
+        margin-top: 0;
         padding: 6px 8px;
         background: rgba(0, 0, 0, 0.6);
         color: #ffffff;
         font-size: 12px;
         line-height: 1.4;
         max-width: 220px;
-        text-align: right;
+        text-align: left;
       }
       #context-menu {
         position: absolute;
@@ -141,6 +145,7 @@
       #context-menu button {
         width: 100%;
         padding: 6px 10px;
+        margin: 4px 0;
         border: none;
         background: #1fd17c;
         color: #0b0b0b;
@@ -165,49 +170,23 @@
         border-color: #0096b5;
         color: #ffffff;
       }
-      .pane-button {
-        padding: 6px 10px;
-        border: 2px solid #ff6b6b;
-        background: #ff6b6b;
-        color: #000000;
-        font-size: 13px;
-        cursor: pointer;
-      }
-      .pane-button:hover {
-        background: #f25555;
-      }
-      #reset-panes {
-        border-color: #ffd166;
-        background: #ffd166;
-      }
-      #reset-panes:hover {
-        background: #f5bf4f;
+      #context-menu .menu-divider {
+        height: 1px;
+        margin: 6px 0;
+        background: rgba(255, 255, 255, 0.15);
       }
     </style>
   </head>
   <body>
     <canvas id="canvas"></canvas>
-    <div id="ui-toggle">
-      <div id="toggle-grid">
-        <button id="toggle-labels" type="button">Labels: On</button>
-        <button id="toggle-groups" type="button">Groups: On</button>
-        <button id="toggle-sensors" type="button">Sensors: On</button>
-        <button id="toggle-trails" type="button">Trails: On</button>
-      </div>
-      <div id="area-controls">
-        <button id="toggle-areas" type="button">Areas: On</button>
-      </div>
+    <div id="pane-ui-layer"></div>
+    <div id="hud-left">
       <div id="speed-controls">
         <button class="speed-button" data-speed="0.1" type="button">0.1x</button>
         <button class="speed-button active" data-speed="1" type="button">1x</button>
         <button class="speed-button" data-speed="5" type="button">5x</button>
         <button class="speed-button" data-speed="10" type="button">10x</button>
         <button class="speed-button" data-speed="20" type="button">20x</button>
-      </div>
-      <div id="pane-controls">
-        <button id="split-horizontal" class="pane-button" type="button">Split H</button>
-        <button id="split-vertical" class="pane-button" type="button">Split V</button>
-        <button id="reset-panes" class="pane-button" type="button">Reset</button>
       </div>
       <div id="selection-help">
         Shift + drag to select aircraft. Click empty space to clear selection. Drag to pan.
@@ -218,6 +197,12 @@
     </div>
     <div id="context-menu">
       <button id="context-go-here" type="button">Go Here</button>
+      <div class="menu-divider"></div>
+      <button id="context-split-horizontal" type="button">Split Horizontal</button>
+      <button id="context-split-vertical" type="button">Split Vertical</button>
+      <div class="menu-divider"></div>
+      <button id="context-remove-pane" type="button">Remove Pane</button>
+      <button id="context-isolate-pane" type="button">Keep Only This Pane</button>
     </div>
     <script type="module" src="./main.ts"></script>
   </body>

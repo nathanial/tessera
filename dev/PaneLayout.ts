@@ -47,6 +47,46 @@ export function countPanes(node: LayoutNode): number {
   return countPanes(node.a) + countPanes(node.b);
 }
 
+export function collectPaneIds(node: LayoutNode, out: Set<string>): void {
+  if (node.kind === "leaf") {
+    out.add(node.id);
+    return;
+  }
+  collectPaneIds(node.a, out);
+  collectPaneIds(node.b, out);
+}
+
+export function removePane(
+  node: LayoutNode,
+  targetId: string
+): { node: LayoutNode | null; removed: boolean } {
+  if (node.kind === "leaf") {
+    if (node.id === targetId) {
+      return { node: null, removed: true };
+    }
+    return { node, removed: false };
+  }
+
+  const left = removePane(node.a, targetId);
+  const right = removePane(node.b, targetId);
+  const removed = left.removed || right.removed;
+
+  if (!removed) {
+    return { node, removed: false };
+  }
+
+  if (!left.node && !right.node) {
+    return { node: null, removed: true };
+  }
+  if (!left.node) {
+    return { node: right.node, removed: true };
+  }
+  if (!right.node) {
+    return { node: left.node, removed: true };
+  }
+  return { node: { ...node, a: left.node, b: right.node }, removed: true };
+}
+
 export function splitLayout(
   node: LayoutNode,
   targetId: string,
