@@ -47,6 +47,15 @@ if (labelToggleButton) {
   });
 }
 
+const groupToggleButton = document.getElementById("toggle-groups") as HTMLButtonElement | null;
+let showGroups = true;
+if (groupToggleButton) {
+  groupToggleButton.addEventListener("click", () => {
+    showGroups = !showGroups;
+    groupToggleButton.textContent = showGroups ? "Groups: On" : "Groups: Off";
+  });
+}
+
 const speedButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".speed-button"));
 if (speedButtons.length > 0) {
   const setActiveSpeed = (value: number) => {
@@ -202,17 +211,19 @@ tessera.render = function () {
 
   draw.end();
 
-  const commandLabels = renderCommandHulls(
-    draw,
-    matrix,
-    w,
-    h,
-    bounds,
-    aircraftRenderer,
-    aircraftRenderer.getCommandGroups(),
-    commandLineRenderer,
-    now / 1000
-  );
+  const commandLabels = showGroups
+    ? renderCommandHulls(
+        draw,
+        matrix,
+        w,
+        h,
+        bounds,
+        aircraftRenderer,
+        aircraftRenderer.getCommandGroups(),
+        commandLineRenderer,
+        now / 1000
+      )
+    : [];
 
   // Render selection highlights under labels
   renderSelectionHighlights(
@@ -249,7 +260,7 @@ tessera.render = function () {
     );
   }
 
-  if (commandLabels.length > 0) {
+  if (showGroups && commandLabels.length > 0) {
     const commandLabelStyle = getCommandLabelStyle();
     for (const label of commandLabels) {
       sdfRenderer.addText(label.text, label.x, label.y, commandLabelStyle);
