@@ -30,6 +30,40 @@ const borderRenderer = new BorderRenderer();
 const aircraftRenderer = new AircraftRenderer(10000); // 10k simulated aircraft
 const labelRenderer = new LabelRenderer();
 
+const labelToggleButton = document.getElementById("toggle-labels") as HTMLButtonElement | null;
+let showLabels = true;
+if (labelToggleButton) {
+  labelToggleButton.addEventListener("click", () => {
+    showLabels = !showLabels;
+    labelToggleButton.textContent = showLabels ? "Labels: On" : "Labels: Off";
+  });
+}
+
+const speedButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".speed-button"));
+if (speedButtons.length > 0) {
+  const setActiveSpeed = (value: number) => {
+    aircraftRenderer.setSpeedMultiplier(value);
+    for (const button of speedButtons) {
+      const buttonValue = Number(button.dataset.speed);
+      button.classList.toggle("active", buttonValue === value);
+    }
+  };
+
+  for (const button of speedButtons) {
+    button.addEventListener("click", () => {
+      const value = Number(button.dataset.speed);
+      if (!Number.isFinite(value)) return;
+      setActiveSpeed(value);
+    });
+  }
+
+  const initialSpeedButton = speedButtons.find((button) => button.classList.contains("active"));
+  const initialSpeed = initialSpeedButton ? Number(initialSpeedButton.dataset.speed) : 0.1;
+  if (Number.isFinite(initialSpeed)) {
+    setActiveSpeed(initialSpeed);
+  }
+}
+
 // Load font atlas
 const fontAtlas = createFontAtlas({
   fontFamily: "Arial, sans-serif",
@@ -107,18 +141,21 @@ tessera.render = function () {
   // RENDER LABELS
   // ============================================
 
-  labelRenderer.render(
-    draw,
-    sdfRenderer,
-    aircraftRenderer,
-    matrix,
-    w,
-    h,
-    bounds,
-    aircraftSize,
-    this.camera.zoom,
-    controlState.isZooming
-  );
+  sdfRenderer.clearText();
+  if (showLabels) {
+    labelRenderer.render(
+      draw,
+      sdfRenderer,
+      aircraftRenderer,
+      matrix,
+      w,
+      h,
+      bounds,
+      aircraftSize,
+      this.camera.zoom,
+      controlState.isZooming
+    );
+  }
 
   // ============================================
   // RENDER UI OVERLAYS

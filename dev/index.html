@@ -14,16 +14,64 @@
         width: 100vw;
         height: 100vh;
         overflow: hidden;
+        font-family: Arial, sans-serif;
       }
       canvas {
         display: block;
         width: 100%;
         height: 100%;
       }
+      #ui-toggle {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 10;
+      }
+      #toggle-labels {
+        padding: 8px 12px;
+        border: 2px solid #ffcc00;
+        background: #ffcc00;
+        color: #000000;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      #toggle-labels:hover {
+        background: #ffb700;
+      }
+      #speed-controls {
+        margin-top: 8px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      .speed-button {
+        padding: 6px 10px;
+        border: 2px solid #00d1ff;
+        background: #00d1ff;
+        color: #000000;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .speed-button.active {
+        background: #0096b5;
+        border-color: #0096b5;
+        color: #ffffff;
+      }
     </style>
   </head>
   <body>
     <canvas id="canvas"></canvas>
+    <div id="ui-toggle">
+      <button id="toggle-labels" type="button">Labels: On</button>
+      <div id="speed-controls">
+        <button class="speed-button active" data-speed="0.1" type="button">0.1x</button>
+        <button class="speed-button" data-speed="1" type="button">1x</button>
+        <button class="speed-button" data-speed="5" type="button">5x</button>
+        <button class="speed-button" data-speed="10" type="button">10x</button>
+        <button class="speed-button" data-speed="20" type="button">20x</button>
+      </div>
+    </div>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

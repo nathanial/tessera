@@ -41,6 +41,14 @@ export class AircraftRenderer {
     this.adsbLayer.update();
   }
 
+  setSpeedMultiplier(multiplier: number): void {
+    this.adsbLayer.setSpeedMultiplier(multiplier);
+  }
+
+  getSpeedMultiplier(): number {
+    return this.adsbLayer.getSpeedMultiplier();
+  }
+
   /**
    * Calculate aircraft screen size based on zoom level.
    */

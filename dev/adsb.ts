@@ -8,7 +8,7 @@
 import { lonLatToTessera } from "../src/index";
 
 // Speed multiplier for visual effect (1 = realistic, higher = faster animation)
-const SPEED_MULTIPLIER = 0.1;
+const DEFAULT_SPEED_MULTIPLIER = 0.1;
 
 export interface Aircraft {
   icao24: string;
@@ -110,6 +110,7 @@ interface SimulatedAircraft extends Aircraft {
   destination: Airport;
   progress: number; // 0-1 along route
   cruiseAltitude: number;
+  baseVelocity: number;
 }
 
 /**
@@ -279,6 +280,7 @@ export class ADSBLayer {
   aircraft: Aircraft[] = [];
   private simAircraft: SimulatedAircraft[] = [];
   private lastUpdateTime: number = 0;
+  private speedMultiplier: number = DEFAULT_SPEED_MULTIPLIER;
 
   constructor(private aircraftCount: number = 500) {
     this.generateAircraft();
@@ -329,8 +331,8 @@ export class ADSBLayer {
       // Current altitude based on flight phase
       const altitude = calculateFlightAltitude(progress, cruiseAltitude);
 
-      // Velocity (base 5000-8000 m/s, scaled by SPEED_MULTIPLIER)
-      const velocity = (5000 + Math.random() * 3000) * SPEED_MULTIPLIER;
+      // Velocity (base 5000-8000 m/s)
+      const baseVelocity = 5000 + Math.random() * 3000;
 
       this.simAircraft.push({
         icao24: randomIcao24(),
@@ -341,12 +343,13 @@ export class ADSBLayer {
         lat: pos.lat,
         altitude,
         heading,
-        velocity,
+        velocity: baseVelocity * this.speedMultiplier,
         onGround: false,
         origin,
         destination,
         progress,
         cruiseAltitude,
+        baseVelocity,
       });
     }
 
@@ -366,7 +369,7 @@ export class ADSBLayer {
       y: ac.y,
       altitude: ac.altitude,
       heading: ac.heading,
-      velocity: ac.velocity,
+      velocity: ac.baseVelocity * this.speedMultiplier,
       onGround: ac.onGround,
     }));
   }
@@ -393,7 +396,7 @@ export class ADSBLayer {
       );
 
       // Progress increment based on velocity
-      const progressIncrement = (ac.velocity * dt) / routeDistance;
+      const progressIncrement = (ac.baseVelocity * this.speedMultiplier * dt) / routeDistance;
       ac.progress += progressIncrement;
 
       // Check if arrived at destination
@@ -446,6 +449,18 @@ export class ADSBLayer {
    */
   async fetch(): Promise<void> {
     this.generateAircraft();
+  }
+
+  setSpeedMultiplier(multiplier: number): void {
+    this.speedMultiplier = Math.max(0, multiplier);
+    for (const ac of this.simAircraft) {
+      ac.velocity = ac.baseVelocity * this.speedMultiplier;
+    }
+    this.updatePublicList();
+  }
+
+  getSpeedMultiplier(): number {
+    return this.speedMultiplier;
   }
 }
 
