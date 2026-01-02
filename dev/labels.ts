@@ -172,13 +172,12 @@ export class LabelPlacer {
     this.prevCalloutPositions.clear();
     for (const callout of callouts) {
       const key = callout.items.map(i => i.id).sort().join(',');
+      // Store offset from centroid (not absolute position) so box moves with panning
       this.prevCalloutPositions.set(key, {
-        boxX: callout.boxX,
-        boxY: callout.boxY,
+        boxOffsetX: callout.boxX - callout.centroidX,
+        boxOffsetY: callout.boxY - callout.centroidY,
         boxWidth: callout.boxWidth,
         boxHeight: callout.boxHeight,
-        centroidX: callout.centroidX,
-        centroidY: callout.centroidY,
       });
     }
 
@@ -379,27 +378,26 @@ export class LabelPlacer {
     const cached = this.prevCalloutPositions.get(clusterKey);
 
     if (cached) {
-      const centroidDelta = Math.hypot(centroidX - cached.centroidX, centroidY - cached.centroidY);
+      // Apply cached offset to current centroid (box moves with panning)
+      const candidateX = centroidX + cached.boxOffsetX;
+      const candidateY = centroidY + cached.boxOffsetY;
+      const boxX = Math.max(padding, Math.min(viewportWidth - boxWidth - padding, candidateX));
+      const boxY = Math.max(padding, Math.min(viewportHeight - boxHeight - padding, candidateY));
 
-      if (centroidDelta < hysteresisMargin) {
-        const boxX = Math.max(padding, Math.min(viewportWidth - boxWidth - padding, cached.boxX));
-        const boxY = Math.max(padding, Math.min(viewportHeight - boxHeight - padding, cached.boxY));
+      const bounds: BoundingBox = { x: boxX, y: boxY, width: boxWidth, height: boxHeight };
 
-        const bounds: BoundingBox = { x: boxX, y: boxY, width: boxWidth, height: boxHeight };
-
-        if (!this.grid.hasOverlap(bounds)) {
-          this.grid.insert(bounds);
-          return {
-            items: items.slice(0, displayCount),
-            boxX,
-            boxY,
-            boxWidth,
-            boxHeight,
-            centroidX,
-            centroidY,
-            aircraftPoints,
-          };
-        }
+      if (!this.grid.hasOverlap(bounds)) {
+        this.grid.insert(bounds);
+        return {
+          items: items.slice(0, displayCount),
+          boxX,
+          boxY,
+          boxWidth,
+          boxHeight,
+          centroidX,
+          centroidY,
+          aircraftPoints,
+        };
       }
     }
 

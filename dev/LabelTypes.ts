@@ -64,14 +64,12 @@ export const DEFAULT_OPTIONS: PlacementOptions = {
 /** Function to measure text width */
 export type TextMeasureFn = (text: string, fontSize: number) => number;
 
-/** Cached callout position for hysteresis */
+/** Cached callout position for hysteresis (stores offset from centroid, not absolute position) */
 export interface CachedCallout {
-  boxX: number;
-  boxY: number;
+  boxOffsetX: number;  // Box position relative to centroid
+  boxOffsetY: number;
   boxWidth: number;
   boxHeight: number;
-  centroidX: number;
-  centroidY: number;
 }
 
 /** Tracks placement decision for each label for frame-to-frame stability */
