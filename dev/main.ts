@@ -11,6 +11,7 @@ import { LabelRenderer } from "./LabelRenderer";
 import { renderDebugGrid, renderStatsOverlay } from "./UIController";
 import { setupSelectionControls } from "./SelectionController";
 import { renderSelectionBox, renderSelectionHighlights } from "./SelectionRenderer";
+import { screenToWorld } from "./CoordinateUtils";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -65,6 +66,63 @@ if (speedButtons.length > 0) {
   if (Number.isFinite(initialSpeed)) {
     setActiveSpeed(initialSpeed);
   }
+}
+
+const contextMenu = document.getElementById("context-menu") as HTMLDivElement | null;
+const goHereButton = document.getElementById("context-go-here") as HTMLButtonElement | null;
+let contextTargetWorld: { x: number; y: number } | null = null;
+
+const hideContextMenu = () => {
+  if (!contextMenu) return;
+  contextMenu.style.display = "none";
+  contextTargetWorld = null;
+};
+
+const showContextMenu = (clientX: number, clientY: number) => {
+  if (!contextMenu) return;
+  contextMenu.style.display = "block";
+  contextMenu.style.left = `${clientX}px`;
+  contextMenu.style.top = `${clientY}px`;
+  if (goHereButton) {
+    goHereButton.disabled = selectionState.selectedIds.size === 0;
+  }
+};
+
+canvas.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const screenX = (event.clientX - rect.left) * dpr;
+  const screenY = (event.clientY - rect.top) * dpr;
+  const matrix = tessera.camera.getMatrix(canvas.width, canvas.height);
+  const world = screenToWorld(screenX, screenY, matrix, canvas.width, canvas.height);
+  const wrappedX = ((world.worldX % 1) + 1) % 1;
+  const clampedY = Math.min(1, Math.max(0, world.worldY));
+  contextTargetWorld = { x: wrappedX, y: clampedY };
+  showContextMenu(event.clientX, event.clientY);
+});
+
+document.addEventListener("click", (event) => {
+  if (!contextMenu || contextMenu.style.display === "none") return;
+  if (contextMenu.contains(event.target as Node)) return;
+  hideContextMenu();
+});
+
+window.addEventListener("blur", hideContextMenu);
+
+if (goHereButton) {
+  goHereButton.addEventListener("click", () => {
+    if (!contextTargetWorld || selectionState.selectedIds.size === 0) {
+      hideContextMenu();
+      return;
+    }
+    aircraftRenderer.setDestinationForAircraft(
+      selectionState.selectedIds,
+      contextTargetWorld.x,
+      contextTargetWorld.y
+    );
+    hideContextMenu();
+  });
 }
 
 // Load font atlas

@@ -5,7 +5,7 @@
  * Aircraft fly between major airports following established routes.
  */
 
-import { lonLatToTessera } from "../src/index";
+import { lonLatToTessera, tesseraToLonLat } from "../src/index";
 
 // Speed multiplier for visual effect (1 = realistic, higher = faster animation)
 const DEFAULT_SPEED_MULTIPLIER = 0.1;
@@ -469,6 +469,47 @@ export class ADSBLayer {
 
   getSpeedMultiplier(): number {
     return this.speedMultiplier;
+  }
+
+  setDestinationForAircraft(ids: Set<string>, destX: number, destY: number): void {
+    if (ids.size === 0) return;
+    const wrappedX = ((destX % 1) + 1) % 1;
+    const clampedY = Math.min(1, Math.max(0, destY));
+    const { lon: destLon, lat: destLat } = tesseraToLonLat(wrappedX, clampedY);
+
+    for (const ac of this.simAircraft) {
+      if (!ids.has(ac.icao24)) continue;
+
+      const origin: Airport = {
+        code: "CUR",
+        name: "Current Position",
+        lon: ac.lon,
+        lat: ac.lat,
+        hub: false,
+      };
+      const destination: Airport = {
+        code: "GO",
+        name: "Go Here",
+        lon: destLon,
+        lat: destLat,
+        hub: false,
+      };
+
+      ac.origin = origin;
+      ac.destination = destination;
+      ac.progress = 0;
+      ac.destX = wrappedX;
+      ac.destY = clampedY;
+      ac.heading = calculateHeadingFromTessera(ac.x, ac.y, ac.destX, ac.destY);
+
+      const distance = calculateDistance(origin.lon, origin.lat, destination.lon, destination.lat);
+      ac.cruiseAltitude =
+        distance > 3000000
+          ? 10000 + Math.random() * 2000
+          : 8000 + Math.random() * 2000;
+    }
+
+    this.updatePublicList();
   }
 }
 

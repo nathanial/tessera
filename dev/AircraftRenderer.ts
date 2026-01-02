@@ -49,6 +49,10 @@ export class AircraftRenderer {
     return this.adsbLayer.getSpeedMultiplier();
   }
 
+  setDestinationForAircraft(ids: Set<string>, destX: number, destY: number): void {
+    this.adsbLayer.setDestinationForAircraft(ids, destX, destY);
+  }
+
   /**
    * Calculate aircraft screen size based on zoom level.
    */

@@ -28,7 +28,7 @@ export function setupCameraControls(
   let lastY = 0;
 
   canvas.addEventListener("mousedown", (e) => {
-    if (e.shiftKey) return;
+    if (e.button !== 0 || e.shiftKey) return;
     isDragging = true;
     lastX = e.clientX;
     lastY = e.clientY;

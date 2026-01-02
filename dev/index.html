@@ -55,6 +55,41 @@
         max-width: 220px;
         text-align: right;
       }
+      #context-help {
+        margin-top: 6px;
+        padding: 6px 8px;
+        background: rgba(0, 0, 0, 0.6);
+        color: #ffffff;
+        font-size: 12px;
+        line-height: 1.4;
+        max-width: 220px;
+        text-align: right;
+      }
+      #context-menu {
+        position: absolute;
+        display: none;
+        min-width: 140px;
+        background: rgba(20, 20, 20, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+        border-radius: 6px;
+        padding: 6px;
+        z-index: 20;
+      }
+      #context-menu button {
+        width: 100%;
+        padding: 6px 10px;
+        border: none;
+        background: #1fd17c;
+        color: #0b0b0b;
+        font-size: 13px;
+        cursor: pointer;
+        text-align: left;
+      }
+      #context-menu button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
       .speed-button {
         padding: 6px 10px;
         border: 2px solid #00d1ff;
@@ -84,6 +119,12 @@
       <div id="selection-help">
         Shift + drag to select aircraft. Click empty space to clear selection. Drag to pan.
       </div>
+      <div id="context-help">
+        Right click for Go Here when aircraft are selected.
+      </div>
+    </div>
+    <div id="context-menu">
+      <button id="context-go-here" type="button">Go Here</button>
     </div>
     <script type="module" src="./main.ts"></script>
   </body>
