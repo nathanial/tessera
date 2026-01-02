@@ -71,6 +71,17 @@
       #toggle-trails:hover {
         background: #00b0e3;
       }
+      #toggle-areas {
+        padding: 8px 12px;
+        border: 2px solid #ff9b33;
+        background: #ff9b33;
+        color: #000000;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      #toggle-areas:hover {
+        background: #f0861a;
+      }
       #toggle-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -82,6 +93,11 @@
         display: flex;
         gap: 6px;
         flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+      #area-controls {
+        margin-top: 8px;
+        display: flex;
         justify-content: flex-end;
       }
       #selection-help {
@@ -152,6 +168,9 @@
         <button id="toggle-groups" type="button">Groups: On</button>
         <button id="toggle-sensors" type="button">Sensors: On</button>
         <button id="toggle-trails" type="button">Trails: On</button>
+      </div>
+      <div id="area-controls">
+        <button id="toggle-areas" type="button">Areas: On</button>
       </div>
       <div id="speed-controls">
         <button class="speed-button" data-speed="0.1" type="button">0.1x</button>

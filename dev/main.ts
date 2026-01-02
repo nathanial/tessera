@@ -15,6 +15,12 @@ import { screenToWorld } from "./CoordinateUtils";
 import { DashedLineRenderer, DashedRingRenderer } from "./DashedSelectionRenderers";
 import { SensorConeRenderer } from "./SensorConeRenderer";
 import { TrailRenderer } from "./TrailRenderer";
+import {
+  createEditableAreasState,
+  renderEditableAreaHandles,
+  renderEditableAreas,
+  setupEditableAreasControls,
+} from "./EditableAreas";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -41,6 +47,8 @@ const commandLineRenderer = new DashedLineRenderer(tessera.gl);
 const dashedRingRenderer = new DashedRingRenderer(tessera.gl);
 const sensorConeRenderer = new SensorConeRenderer(tessera.gl);
 const trailRenderer = new TrailRenderer(tessera.gl);
+const editableAreasState = createEditableAreasState();
+setupEditableAreasControls(tessera, canvas, aircraftRenderer, editableAreasState);
 
 const labelToggleButton = document.getElementById("toggle-labels") as HTMLButtonElement | null;
 let showLabels = true;
@@ -75,6 +83,21 @@ if (trailsToggleButton) {
   trailsToggleButton.addEventListener("click", () => {
     showTrails = !showTrails;
     trailsToggleButton.textContent = showTrails ? "Trails: On" : "Trails: Off";
+  });
+}
+
+const areasToggleButton = document.getElementById("toggle-areas") as HTMLButtonElement | null;
+let showAreas = true;
+if (areasToggleButton) {
+  areasToggleButton.addEventListener("click", () => {
+    showAreas = !showAreas;
+    editableAreasState.enabled = showAreas;
+    if (!showAreas) {
+      editableAreasState.selectedId = null;
+      editableAreasState.activeHandle = null;
+      editableAreasState.dragState = null;
+    }
+    areasToggleButton.textContent = showAreas ? "Areas: On" : "Areas: Off";
   });
 }
 
@@ -257,6 +280,9 @@ tessera.render = function () {
   draw.begin(matrix, w, h);
 
   // Render aircraft
+  if (showAreas) {
+    renderEditableAreas(draw, matrix, w, h, bounds, now / 1000, editableAreasState);
+  }
   aircraftRenderer.render(draw, bounds, aircraftSize);
 
   draw.end();
@@ -327,6 +353,9 @@ tessera.render = function () {
 
   renderStatsOverlay(draw, sdfRenderer, matrix, w, h, this.camera.zoom);
   renderSelectionBox(draw, matrix, w, h, selectionState);
+  if (showAreas) {
+    renderEditableAreaHandles(draw, matrix, w, h, bounds, editableAreasState);
+  }
 
   sdfRenderer.render(matrix, w, h);
 
