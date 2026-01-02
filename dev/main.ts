@@ -15,6 +15,7 @@ import { screenToWorld } from "./CoordinateUtils";
 import { DashedLineRenderer, DashedRingRenderer } from "./DashedSelectionRenderers";
 import { SensorConeRenderer } from "./SensorConeRenderer";
 import { TrailRenderer } from "./TrailRenderer";
+import { SDFCircleRenderer } from "./SDFCircleRenderer";
 import {
   createEditableAreasState,
   renderEditableAreaHandles,
@@ -47,6 +48,7 @@ const commandLineRenderer = new DashedLineRenderer(tessera.gl);
 const dashedRingRenderer = new DashedRingRenderer(tessera.gl);
 const sensorConeRenderer = new SensorConeRenderer(tessera.gl);
 const trailRenderer = new TrailRenderer(tessera.gl);
+const circleRenderer = new SDFCircleRenderer(tessera.gl);
 const editableAreasState = createEditableAreasState();
 setupEditableAreasControls(tessera, canvas, aircraftRenderer, editableAreasState);
 
@@ -277,14 +279,22 @@ tessera.render = function () {
     );
   }
 
-  draw.begin(matrix, w, h);
-
-  // Render aircraft
   if (showAreas) {
-    renderEditableAreas(draw, matrix, w, h, bounds, now / 1000, editableAreasState);
+    circleRenderer.begin(matrix, w, h);
   }
-  aircraftRenderer.render(draw, bounds, aircraftSize);
 
+  draw.begin(matrix, w, h);
+  if (showAreas) {
+    renderEditableAreas(draw, matrix, w, h, bounds, now / 1000, editableAreasState, circleRenderer);
+  }
+  draw.end();
+
+  if (showAreas) {
+    circleRenderer.render();
+  }
+
+  draw.begin(matrix, w, h);
+  aircraftRenderer.render(draw, bounds, aircraftSize);
   draw.end();
 
   const commandLabels = showGroups

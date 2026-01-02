@@ -6,6 +6,7 @@ import type { DrawContext } from "../src/index";
 import { lonLatToTessera, type Tessera } from "../src/index";
 import type { AircraftRenderer } from "./AircraftRenderer";
 import { screenToWorld, worldToScreen } from "./CoordinateUtils";
+import type { SDFCircleRenderer } from "./SDFCircleRenderer";
 import {
   angleBetween,
   computeGateCorners,
@@ -399,7 +400,7 @@ function buildAreaCache(area: EditableArea): AreaCache {
     }
     case "magnetic": {
       cache.bounds = polygonBounds(area.points);
-      cache.dotPoints = buildMagneticDots(area.points, area.snapRadius * 0.5);
+      cache.dotPoints = buildMagneticDots(area.points, area.snapRadius * 0.7);
       return cache;
     }
     case "grid": {
@@ -526,47 +527,43 @@ function drawDashedPolyline(
   draw.stroke();
 }
 
-function renderDotLatticePoints(
-  draw: DrawContext,
+function renderDotLatticeCircles(
+  circleRenderer: SDFCircleRenderer | null,
   points: Vec2[],
-  radius: number,
+  radiusWorld: number,
+  worldPerPixel: number,
   timeSeconds: number,
   color: Color
 ): void {
-  if (points.length === 0) return;
-  draw.fillStyle = color;
-  draw.beginPath();
+  if (!circleRenderer || points.length === 0 || worldPerPixel <= 0) return;
+  const baseRadiusPx = radiusWorld / worldPerPixel;
+  const feather = Math.max(1.0, baseRadiusPx * 0.25);
 
   for (const p of points) {
-    const shimmer = 0.35 + 0.35 * Math.sin(timeSeconds * 2.2 + p.x * 60 + p.y * 45);
-    const r = radius * (0.7 + shimmer * 0.6);
-    draw.moveTo(p.x + r, p.y);
-    draw.arc(p.x, p.y, Math.max(0.0005, r), 0, TAU_CONST);
+    const shimmer = 0.5 + 0.5 * Math.sin(timeSeconds * 2.2 + p.x * 60 + p.y * 45);
+    const rPx = baseRadiusPx * (0.8 + shimmer * 0.2);
+    circleRenderer.addCircle(p.x, p.y, rPx, feather, color);
   }
-
-  draw.fill();
 }
 
-function renderStampPoints(
-  draw: DrawContext,
+function renderStampCircles(
+  circleRenderer: SDFCircleRenderer | null,
   points: Vec2[],
-  size: number,
+  sizeWorld: number,
+  worldPerPixel: number,
   timeSeconds: number,
   color: Color
 ): void {
-  if (points.length === 0) return;
-  draw.fillStyle = color;
-  draw.beginPath();
+  if (!circleRenderer || points.length === 0 || worldPerPixel <= 0) return;
+  const baseRadiusPx = sizeWorld / worldPerPixel;
+  const feather = Math.max(1.0, baseRadiusPx * 0.3);
 
   for (let i = 0; i < points.length; i++) {
     const p = points[i]!;
     const jitter = 0.2 * Math.sin(timeSeconds * 1.5 + i * 2.1);
-    const radius = size * (0.6 + jitter);
-    draw.moveTo(p.x + radius, p.y);
-    draw.arc(p.x, p.y, Math.max(0.0005, radius), 0, TAU_CONST);
+    const rPx = baseRadiusPx * (0.6 + jitter);
+    circleRenderer.addCircle(p.x, p.y, rPx, feather, color);
   }
-
-  draw.fill();
 }
 
 function renderFlowLines(
@@ -763,7 +760,14 @@ function renderContourArea(draw: DrawContext, area: ContourArea, cache: AreaCach
   }
 }
 
-function renderMagneticArea(draw: DrawContext, area: MagneticArea, cache: AreaCache, timeSeconds: number): void {
+function renderMagneticArea(
+  draw: DrawContext,
+  area: MagneticArea,
+  cache: AreaCache,
+  timeSeconds: number,
+  worldPerPixel: number,
+  circleRenderer: SDFCircleRenderer | null
+): void {
   draw.fillStyle = [area.color[0], area.color[1], area.color[2], 0.15];
   drawPolygon(draw, area.points, true, false);
 
@@ -771,10 +775,11 @@ function renderMagneticArea(draw: DrawContext, area: MagneticArea, cache: AreaCa
   draw.lineWidth = 2;
   drawDashedPolyline(draw, area.points, DEFAULT_DASH, DEFAULT_GAP, true, timeSeconds * 0.02);
 
-  renderDotLatticePoints(
-    draw,
+  renderDotLatticeCircles(
+    circleRenderer,
     cache.dotPoints ?? [],
-    area.snapRadius * 0.15,
+    area.snapRadius * 0.05,
+    worldPerPixel,
     timeSeconds,
     [area.accent[0], area.accent[1], area.accent[2], 0.22]
   );
@@ -805,13 +810,21 @@ function renderGridArea(draw: DrawContext, area: GridArea, cache: AreaCache): vo
   }
 }
 
-function renderStampArea(draw: DrawContext, area: StampArea, cache: AreaCache, timeSeconds: number): void {
+function renderStampArea(
+  draw: DrawContext,
+  area: StampArea,
+  cache: AreaCache,
+  timeSeconds: number,
+  worldPerPixel: number,
+  circleRenderer: SDFCircleRenderer | null
+): void {
   draw.fillStyle = [area.color[0], area.color[1], area.color[2], 0.1];
   drawPolygon(draw, area.points, true, false);
-  renderStampPoints(
-    draw,
+  renderStampCircles(
+    circleRenderer,
     cache.stampPoints ?? [],
-    area.stampSize,
+    area.stampSize * 0.6,
+    worldPerPixel,
     timeSeconds,
     [area.accent[0], area.accent[1], area.accent[2], 0.35]
   );
@@ -1478,7 +1491,8 @@ export function renderEditableAreas(
   h: number,
   bounds: Bounds,
   timeSeconds: number,
-  state: EditableAreasState
+  state: EditableAreasState,
+  circleRenderer: SDFCircleRenderer | null
 ): void {
   const worldPerPixel = computeWorldPerPixel(bounds, w);
   const padding = worldPerPixel * 40;
@@ -1495,13 +1509,13 @@ export function renderEditableAreas(
         renderContourArea(draw, area, cache);
         break;
       case "magnetic":
-        renderMagneticArea(draw, area, cache, timeSeconds);
+        renderMagneticArea(draw, area, cache, timeSeconds, worldPerPixel, circleRenderer);
         break;
       case "grid":
         renderGridArea(draw, area, cache);
         break;
       case "stamp":
-        renderStampArea(draw, area, cache, timeSeconds);
+        renderStampArea(draw, area, cache, timeSeconds, worldPerPixel, circleRenderer);
         break;
       case "heat":
         renderHeatArea(draw, area, cache, timeSeconds);
