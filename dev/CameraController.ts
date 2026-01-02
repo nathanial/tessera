@@ -28,6 +28,7 @@ export function setupCameraControls(
   let lastY = 0;
 
   canvas.addEventListener("mousedown", (e) => {
+    if (e.shiftKey) return;
     isDragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
@@ -140,7 +141,7 @@ export function setupCameraControls(
     }
   });
 
-  console.log("Controls: drag to pan, scroll to zoom, G to toggle debug grid");
+  console.log("Controls: drag to pan, shift+drag to select, scroll to zoom, G to toggle debug grid");
 
   return state;
 }

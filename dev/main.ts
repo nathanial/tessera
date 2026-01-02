@@ -9,6 +9,8 @@ import { BorderRenderer } from "./BorderRenderer";
 import { AircraftRenderer } from "./AircraftRenderer";
 import { LabelRenderer } from "./LabelRenderer";
 import { renderDebugGrid, renderStatsOverlay } from "./UIController";
+import { setupSelectionControls } from "./SelectionController";
+import { renderSelectionBox, renderSelectionHighlights } from "./SelectionRenderer";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -29,6 +31,7 @@ const sdfRenderer = new SDFRenderer(tessera.gl);
 const borderRenderer = new BorderRenderer();
 const aircraftRenderer = new AircraftRenderer(10000); // 10k simulated aircraft
 const labelRenderer = new LabelRenderer();
+const selectionState = setupSelectionControls(tessera, canvas, aircraftRenderer);
 
 const labelToggleButton = document.getElementById("toggle-labels") as HTMLButtonElement | null;
 let showLabels = true;
@@ -137,6 +140,18 @@ tessera.render = function () {
 
   draw.end();
 
+  // Render selection highlights under labels
+  renderSelectionHighlights(
+    draw,
+    matrix,
+    w,
+    h,
+    bounds,
+    aircraftRenderer,
+    aircraftSize,
+    selectionState.selectedIds
+  );
+
   // ============================================
   // RENDER LABELS
   // ============================================
@@ -166,6 +181,7 @@ tessera.render = function () {
   }
 
   renderStatsOverlay(draw, sdfRenderer, matrix, w, h, this.camera.zoom);
+  renderSelectionBox(draw, matrix, w, h, selectionState);
 
   sdfRenderer.render(matrix, w, h);
 

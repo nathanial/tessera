@@ -15,6 +15,8 @@ export interface Aircraft {
   callsign: string | null;
   x: number; // Tessera coordinate (0-1)
   y: number; // Tessera coordinate (0-1)
+  destX: number; // Tessera coordinate (0-1), destination
+  destY: number; // Tessera coordinate (0-1), destination
   altitude: number; // meters (barometric)
   heading: number; // radians (0 = north, clockwise)
   velocity: number; // m/s
@@ -339,6 +341,8 @@ export class ADSBLayer {
         callsign: Math.random() > 0.05 ? generateCallsign(origin, destination) : null,
         x,
         y,
+        destX: destCoords.x,
+        destY: destCoords.y,
         lon: pos.lon,
         lat: pos.lat,
         altitude,
@@ -367,6 +371,8 @@ export class ADSBLayer {
       callsign: ac.callsign,
       x: ac.x,
       y: ac.y,
+      destX: ac.destX,
+      destY: ac.destY,
       altitude: ac.altitude,
       heading: ac.heading,
       velocity: ac.baseVelocity * this.speedMultiplier,
@@ -409,6 +415,9 @@ export class ADSBLayer {
         ac.destination = newDestination;
         ac.progress = 0;
         ac.callsign = Math.random() > 0.05 ? generateCallsign(newOrigin, newDestination) : null;
+        const destCoords = lonLatToTessera(newDestination.lon, newDestination.lat);
+        ac.destX = destCoords.x;
+        ac.destY = destCoords.y;
 
         // New cruise altitude
         const distance = calculateDistance(
@@ -434,8 +443,7 @@ export class ADSBLayer {
       ac.y = y;
 
       // Update heading based on Tessera movement direction
-      const destCoords = lonLatToTessera(ac.destination.lon, ac.destination.lat);
-      ac.heading = calculateHeadingFromTessera(x, y, destCoords.x, destCoords.y);
+      ac.heading = calculateHeadingFromTessera(x, y, ac.destX, ac.destY);
 
       // Update altitude based on flight phase
       ac.altitude = calculateFlightAltitude(ac.progress, ac.cruiseAltitude);
