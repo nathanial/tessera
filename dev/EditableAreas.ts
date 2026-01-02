@@ -629,28 +629,29 @@ function renderFlowLines(
 function renderCachedFlowLines(
   draw: DrawContext,
   flow: HeatFlowCache,
+  polygon: Vec2[],
   timeSeconds: number,
   speed: number,
   color: Color
 ): void {
   if (flow.segments.length === 0 || flow.step <= 0 || flow.half <= 0) return;
-  const phase = (timeSeconds * speed) % flow.step;
+  const travel = timeSeconds * speed * flow.step * 40;
+  const range = flow.half * 2;
 
   draw.strokeStyle = color;
   draw.lineWidth = 1.2;
   draw.beginPath();
 
   for (const segment of flow.segments) {
-    let offset = segment.dist + phase;
-    if (offset > flow.half) {
-      offset -= flow.half * 2;
-    } else if (offset < -flow.half) {
-      offset += flow.half * 2;
-    }
+    let offset = segment.dist + travel;
+    offset = ((offset + flow.half) % range + range) % range - flow.half;
     const startX = segment.baseX + flow.dir.x * offset;
     const startY = segment.baseY + flow.dir.y * offset;
     const endX = startX + flow.dir.x * flow.segmentLength;
     const endY = startY + flow.dir.y * flow.segmentLength;
+    const midX = (startX + endX) * 0.5;
+    const midY = (startY + endY) * 0.5;
+    if (!pointInPolygon({ x: midX, y: midY }, polygon)) continue;
     draw.moveTo(startX, startY);
     draw.lineTo(endX, endY);
   }
@@ -658,12 +659,13 @@ function renderCachedFlowLines(
   draw.stroke();
 }
 
-function renderChevrons(
+function renderGateChevronsAnimated(
   draw: DrawContext,
   center: Vec2,
   length: number,
   width: number,
   rotation: number,
+  timeSeconds: number,
   color: Color
 ): void {
   const dir = { x: Math.cos(rotation), y: Math.sin(rotation) };
@@ -671,16 +673,20 @@ function renderChevrons(
   const halfLength = length * 0.5;
   const halfWidth = width * 0.5;
 
-  const chevronCount = 3;
-  const spacing = length / (chevronCount + 1);
-  const size = Math.min(halfWidth * 0.6, spacing * 0.35);
+  const chevronCount = 6;
+  const size = Math.min(halfWidth * 0.5, length / (chevronCount * 2.5));
+  const flow = (timeSeconds * 0.12) % 1;
+  const edgeInset = Math.min(halfLength * 0.18, length * 0.12);
+  const usableLength = Math.max(0.001, length - edgeInset * 2);
 
-  draw.strokeStyle = color;
-  draw.lineWidth = 1.5;
-  draw.beginPath();
+  draw.lineWidth = 3.2;
 
-  for (let i = 1; i <= chevronCount; i++) {
-    const along = -halfLength + i * spacing;
+  for (let i = 0; i < chevronCount; i++) {
+    const t = (i / chevronCount + flow) % 1;
+    const along = -halfLength + edgeInset + t * usableLength;
+    const fade = 0.35 + 0.55 * Math.sin(Math.PI * t);
+    draw.strokeStyle = [color[0], color[1], color[2], color[3] * fade];
+
     const base = {
       x: center.x + dir.x * along,
       y: center.y + dir.y * along,
@@ -698,12 +704,28 @@ function renderChevrons(
       x: base.x + dir.x * size,
       y: base.y + dir.y * size,
     };
+
+    draw.beginPath();
     draw.moveTo(left.x, left.y);
     draw.lineTo(tip.x, tip.y);
     draw.lineTo(right.x, right.y);
+    draw.stroke();
   }
 
-  draw.stroke();
+  const dash = length / 8;
+  const gap = dash * 0.65;
+  const dashOffset = timeSeconds * length * 0.15;
+  const start = {
+    x: center.x - dir.x * (halfLength * 0.82),
+    y: center.y - dir.y * (halfLength * 0.82),
+  };
+  const end = {
+    x: center.x + dir.x * (halfLength * 0.82),
+    y: center.y + dir.y * (halfLength * 0.82),
+  };
+  draw.strokeStyle = [color[0], color[1], color[2], 0.25];
+  draw.lineWidth = 2.2;
+  drawDashedPolyline(draw, [start, end], dash, gap, false, dashOffset);
 }
 
 function renderRingMarkers(
@@ -717,7 +739,7 @@ function renderRingMarkers(
   const step = span / markerCount;
 
   draw.strokeStyle = color;
-  draw.lineWidth = 1.2;
+  draw.lineWidth = 2.2;
   draw.beginPath();
 
   for (let i = 0; i <= markerCount; i++) {
@@ -754,7 +776,7 @@ function renderInkArea(draw: DrawContext, area: InkArea, cache: AreaCache): void
 function renderContourArea(draw: DrawContext, area: ContourArea, cache: AreaCache): void {
   const bands = cache.contourBands ?? [];
   draw.strokeStyle = [area.accent[0], area.accent[1], area.accent[2], 0.8];
-  draw.lineWidth = 1.6;
+  draw.lineWidth = 3.4;
   for (const band of bands) {
     drawPolyline(draw, band, true);
   }
@@ -837,6 +859,7 @@ function renderHeatArea(draw: DrawContext, area: HeatArea, cache: AreaCache, tim
     renderCachedFlowLines(
       draw,
       cache.heatFlow,
+      area.points,
       timeSeconds,
       area.flowSpeed,
       [area.accent[0], area.accent[1], area.accent[2], 0.5]
@@ -856,27 +879,27 @@ function renderHeatArea(draw: DrawContext, area: HeatArea, cache: AreaCache, tim
   drawPolygon(draw, area.points, false, true);
 }
 
-function renderGateArea(draw: DrawContext, area: GateArea, cache: AreaCache): void {
+function renderGateArea(draw: DrawContext, area: GateArea, cache: AreaCache, timeSeconds: number): void {
   const corners = cache.gateCorners ?? computeGateCorners(area.center, area.length, area.width, area.rotation);
   draw.fillStyle = [area.color[0], area.color[1], area.color[2], 0.18];
   drawPolygon(draw, corners, true, false);
   draw.strokeStyle = [area.accent[0], area.accent[1], area.accent[2], 0.75];
-  draw.lineWidth = 2;
+  draw.lineWidth = 4.4;
   drawPolygon(draw, corners, false, true);
 
-  renderChevrons(draw, area.center, area.length, area.width, area.rotation, area.accent);
+  renderGateChevronsAnimated(draw, area.center, area.length, area.width, area.rotation, timeSeconds, area.accent);
 }
 
 function renderRingArea(draw: DrawContext, area: RingArea, cache: AreaCache, timeSeconds: number): void {
   const { start, end } = normalizeArc(area.startAngle, area.endAngle);
   draw.strokeStyle = [area.accent[0], area.accent[1], area.accent[2], 0.8];
-  draw.lineWidth = 2;
+  draw.lineWidth = 4.2;
   draw.beginPath();
   draw.arc(area.center.x, area.center.y, area.outerRadius, start, end);
   draw.stroke();
 
   draw.strokeStyle = [area.accent[0], area.accent[1], area.accent[2], 0.5];
-  draw.lineWidth = 1.4;
+  draw.lineWidth = 3.0;
   drawDashedPolyline(
     draw,
     cache.ringArc ?? buildArcPoints(area.center, area.outerRadius, start, end, 32),
@@ -1180,6 +1203,35 @@ export function createEditableAreasState(): EditableAreasState {
     lon: randRange(-170, 170),
     lat: randRange(-60, 60),
   });
+  const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const hp = (h % 1) * 6;
+    const x = c * (1 - Math.abs((hp % 2) - 1));
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    if (hp >= 0 && hp < 1) {
+      r = c;
+      g = x;
+    } else if (hp < 2) {
+      r = x;
+      g = c;
+    } else if (hp < 3) {
+      g = c;
+      b = x;
+    } else if (hp < 4) {
+      g = x;
+      b = c;
+    } else if (hp < 5) {
+      r = x;
+      b = c;
+    } else {
+      r = c;
+      b = x;
+    }
+    const m = l - c / 2;
+    return [r + m, g + m, b + m];
+  };
 
   const worldScaleAt = (lon: number, lat: number) => {
     const base = lonLatToTessera(lon, lat);
@@ -1230,12 +1282,15 @@ export function createEditableAreasState(): EditableAreasState {
     const latSize = randRange(0.4, 1.0);
     const points = buildPolygon(center.lon, center.lat, lonSize, latSize, 5 + Math.floor(randRange(0, 3)));
     const sizeWorld = Math.max(dx * lonSize, dy * latSize);
+    const hue = randRange(0, 1);
+    const baseRgb = hslToRgb(hue, 0.65, 0.5);
+    const accentRgb = hslToRgb(hue, 0.7, 0.62);
     areas.push({
       id: makeId("contours"),
       type: "contours",
       label: `Contours ${pad(i)}`,
-      color: [0.6, 0.2, 0.95, 1],
-      accent: [0.7, 0.45, 1, 1],
+      color: [baseRgb[0], baseRgb[1], baseRgb[2], 1],
+      accent: [accentRgb[0], accentRgb[1], accentRgb[2], 1],
       version: 0,
       points,
       bandCount: 3,
@@ -1521,7 +1576,7 @@ export function renderEditableAreas(
         renderHeatArea(draw, area, cache, timeSeconds);
         break;
       case "gate":
-        renderGateArea(draw, area, cache);
+        renderGateArea(draw, area, cache, timeSeconds);
         break;
       case "ring":
         renderRingArea(draw, area, cache, timeSeconds);
