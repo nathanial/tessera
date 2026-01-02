@@ -112,11 +112,20 @@ fontAtlas.ready.then(() => {
   console.log("Font atlas loaded for aircraft labels");
 });
 
-// Text styling for aircraft labels (fontSize will be scaled dynamically)
+// Text styling for aircraft labels
 const labelStyle = {
   fontSize: LABEL_FONT_SIZE,
   color: [1, 1, 1, 1] as [number, number, number, number],
   haloColor: [0, 0, 0, 0.8] as [number, number, number, number],
+  haloWidth: 2,
+  align: "left" as const,
+};
+
+// Text styling for stats overlay
+const statsStyle = {
+  fontSize: 24,
+  color: [1, 1, 1, 0.8] as [number, number, number, number],
+  haloColor: [0, 0, 0, 0.9] as [number, number, number, number],
   haloWidth: 2,
   align: "left" as const,
 };
@@ -587,6 +596,24 @@ tessera.render = function () {
       draw.end();
     }
   }
+
+  // Render stats overlay in top-left corner
+  const stats = draw.getStats();
+  const statsText = `batches: ${stats.batches}  instances: ${stats.instances}  zoom: ${this.camera.zoom.toFixed(1)}`;
+
+  // Draw background for stats
+  const statsPadding = 8;
+  const statsHeight = 24 + statsPadding * 2;
+  const statsWidth = statsText.length * 14 + statsPadding * 2; // Approximate width
+  draw.begin(matrix, w, h);
+  draw.fillStyle = [0, 0, 0, 1];
+  const bgTopLeft = screenToWorld(0, 0, matrix, w, h);
+  const bgBottomRight = screenToWorld(statsWidth, statsHeight, matrix, w, h);
+  draw.fillRect(bgTopLeft.worldX, bgTopLeft.worldY, bgBottomRight.worldX - bgTopLeft.worldX, bgBottomRight.worldY - bgTopLeft.worldY);
+  draw.end();
+
+  const statsWorld = screenToWorld(statsPadding, statsHeight - statsPadding, matrix, w, h);
+  sdfRenderer.addText(statsText, statsWorld.worldX, statsWorld.worldY, statsStyle);
 
   sdfRenderer.render(matrix, w, h);
 

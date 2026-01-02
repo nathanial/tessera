@@ -82,6 +82,10 @@ export class TemplateManager {
   private batches: InstanceBatch[] = [];
   private currentTemplateId: number = -1;
 
+  // Stats tracking: accumulate across multiple begin/end pairs per frame
+  private cumulativeBatchCount: number = 0;
+  private cumulativeInstanceCount: number = 0;
+
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
 
@@ -161,7 +165,7 @@ export class TemplateManager {
   }
 
   /**
-   * Reset for new frame. Call at start of each frame.
+   * Reset for new begin/end pair. Called at start of each begin().
    */
   reset(): void {
     this.instanceCount = 0;
@@ -233,17 +237,25 @@ export class TemplateManager {
     // Cleanup
     gl.bindVertexArray(null);
     gl.bindTexture(GL_TEXTURE_2D, null);
+
+    // Accumulate stats for this render pass
+    this.cumulativeBatchCount += this.batches.length;
+    this.cumulativeInstanceCount += this.instanceCount;
   }
 
   /**
-   * Get rendering statistics from the last frame.
+   * Get rendering statistics from the last frame and reset for next frame.
    */
   getStats(): { batches: number; instances: number; templates: number } {
-    return {
-      batches: this.batches.length,
-      instances: this.instanceCount,
+    const stats = {
+      batches: this.cumulativeBatchCount,
+      instances: this.cumulativeInstanceCount,
       templates: this.templates.length,
     };
+    // Reset cumulative stats for next frame
+    this.cumulativeBatchCount = 0;
+    this.cumulativeInstanceCount = 0;
+    return stats;
   }
 
   /**
