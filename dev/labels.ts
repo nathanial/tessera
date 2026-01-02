@@ -11,7 +11,6 @@ import { SpatialGrid } from "./SpatialGrid";
 import type { BoundingBox } from "./SpatialGrid";
 import {
   DEFAULT_OPTIONS,
-  LEADER_OFFSETS,
   type LabelItem,
   type PlacedLabel,
   type StackedCallout,
@@ -21,6 +20,21 @@ import {
   type CachedCallout,
   type CachedPlacement,
 } from "./LabelTypes";
+
+const CANDIDATE_DIRECTIONS = [
+  { x: 1, y: 0 },   // right
+  { x: 1, y: -1 },  // right-up
+  { x: 1, y: 1 },   // right-down
+  { x: -1, y: 0 },  // left
+  { x: -1, y: -1 }, // left-up
+  { x: -1, y: 1 },  // left-down
+  { x: 0, y: -1 },  // above
+  { x: 0, y: 1 },   // below
+];
+
+const CANDIDATE_RINGS = [1, 1.6, 2.2, 3];
+const HIDDEN_INDICATOR_ID = "__hidden_indicator__";
+const CALLOUT_CACHE_FRAMES = 120;
 
 // Re-export types for external consumers
 export type { LabelItem, PlacedLabel, StackedCallout, PlacementResult, PlacementOptions, TextMeasureFn, BoundingBox };
@@ -34,8 +48,10 @@ export class LabelPlacer {
   // Hysteresis state for stable clustering
   private prevClusterAssignments: Map<string, string> = new Map();
   private prevCalloutPositions: Map<string, CachedCallout> = new Map();
+  private calloutLastSeen: Map<string, number> = new Map();
   private prevPlacements: Map<string, CachedPlacement> = new Map();
   private newPlacements: Map<string, CachedPlacement> = new Map();
+  private frameIndex = 0;
 
   constructor(options: Partial<PlacementOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -61,8 +77,10 @@ export class LabelPlacer {
   clearState(): void {
     this.prevClusterAssignments.clear();
     this.prevCalloutPositions.clear();
+    this.calloutLastSeen.clear();
     this.prevPlacements.clear();
     this.newPlacements.clear();
+    this.frameIndex = 0;
   }
 
   /**
@@ -84,16 +102,19 @@ export class LabelPlacer {
     labelOffsetX: number = 10,
     gridOffset: { x: number; y: number } = { x: 0, y: 0 }
   ): PlacementResult {
+    this.frameIndex += 1;
+    this.pruneCalloutCache();
     this.grid.clear();
     this.newPlacements.clear();
 
     const directLabels: PlacedLabel[] = [];
     const displaced: PlacedLabel[] = [];
+    let hiddenCount = 0;
 
     // Sort by priority (higher first)
     const sorted = [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
-    // First pass: try direct placement with hysteresis
+    // First pass: try direct placement
     for (const item of sorted) {
       const anchor = worldToScreen(item.anchorX, item.anchorY);
 
@@ -105,46 +126,27 @@ export class LabelPlacer {
 
       const labelWidth = this.measureText(item.text);
       const labelHeight = this.options.fontSize * this.options.lineHeight;
+      const prevPlacement = this.prevPlacements.get(item.id);
+      const preferCallout = prevPlacement?.type === "callout";
 
       // Try preferred position (right of anchor)
       const preferredX = anchor.screenX + labelOffsetX;
       const preferredY = anchor.screenY - labelHeight / 2;
 
-      const bounds: BoundingBox = {
-        x: preferredX - this.options.padding,
-        y: preferredY - this.options.padding,
-        width: labelWidth + this.options.padding * 2,
-        height: labelHeight + this.options.padding * 2,
-      };
+      const bounds = this.buildBounds(preferredX, preferredY, labelWidth, labelHeight);
 
-      const prevPlacement = this.prevPlacements.get(item.id);
-      const wasDirect = prevPlacement?.type === 'direct';
-      const hasOverlap = this.grid.hasOverlap(bounds);
-
-      if (!hasOverlap || (wasDirect && hasOverlap)) {
-        if (!hasOverlap) {
-          this.grid.insert(bounds);
-          directLabels.push({
-            item,
-            screenX: preferredX,
-            screenY: preferredY,
-            anchorScreenX: anchor.screenX,
-            anchorScreenY: anchor.screenY,
-            needsLeaderLine: false,
-            bounds,
-          });
-          this.newPlacements.set(item.id, { type: 'direct' });
-        } else {
-          displaced.push({
-            item,
-            screenX: preferredX,
-            screenY: preferredY,
-            anchorScreenX: anchor.screenX,
-            anchorScreenY: anchor.screenY,
-            needsLeaderLine: true,
-            bounds,
-          });
-        }
+      if (!preferCallout && this.isWithinViewport(bounds, viewportWidth, viewportHeight) && !this.grid.hasOverlap(bounds)) {
+        this.grid.insert(bounds);
+        directLabels.push({
+          item,
+          screenX: preferredX,
+          screenY: preferredY,
+          anchorScreenX: anchor.screenX,
+          anchorScreenY: anchor.screenY,
+          needsLeaderLine: false,
+          bounds,
+        });
+        this.newPlacements.set(item.id, { type: 'direct' });
       } else {
         displaced.push({
           item,
@@ -159,32 +161,26 @@ export class LabelPlacer {
     }
 
     // Second pass: cluster displaced labels and create callouts
-    const { leaderLabels, callouts, newClusterAssignments } = this.resolveDisplaced(
+    const { leaderLabels, callouts, newClusterAssignments, hiddenCount: displacedHidden } = this.resolveDisplaced(
       displaced,
       viewportWidth,
       viewportHeight,
       gridOffset
     );
+    hiddenCount += displacedHidden;
 
     // Update hysteresis state
     this.prevClusterAssignments = newClusterAssignments;
 
-    this.prevCalloutPositions.clear();
-    for (const callout of callouts) {
-      const key = callout.items.map(i => i.id).sort().join(',');
-      // Store offset from centroid (not absolute position) so box moves with panning
-      this.prevCalloutPositions.set(key, {
-        boxOffsetX: callout.boxX - callout.centroidX,
-        boxOffsetY: callout.boxY - callout.centroidY,
-        boxWidth: callout.boxWidth,
-        boxHeight: callout.boxHeight,
-      });
-    }
-
     this.prevPlacements = this.newPlacements;
     this.newPlacements = new Map();
 
-    return { directLabels, leaderLabels, callouts };
+    let hiddenIndicator: PlacedLabel | undefined;
+    if (hiddenCount > 0) {
+      hiddenIndicator = this.placeHiddenIndicator(hiddenCount, viewportWidth, viewportHeight);
+    }
+
+    return { directLabels, leaderLabels, callouts, hiddenCount, hiddenIndicator };
   }
 
   private measureText(text: string): number {
@@ -204,14 +200,124 @@ export class LabelPlacer {
     return width;
   }
 
+  private buildBounds(
+    screenX: number,
+    screenY: number,
+    labelWidth: number,
+    labelHeight: number
+  ): BoundingBox {
+    const padding = this.options.padding;
+    return {
+      x: screenX - padding,
+      y: screenY - padding,
+      width: labelWidth + padding * 2,
+      height: labelHeight + padding * 2,
+    };
+  }
+
+  private isWithinViewport(
+    bounds: BoundingBox,
+    viewportWidth: number,
+    viewportHeight: number
+  ): boolean {
+    return (
+      bounds.x >= 0 &&
+      bounds.y >= 0 &&
+      bounds.x + bounds.width <= viewportWidth &&
+      bounds.y + bounds.height <= viewportHeight
+    );
+  }
+
+  private orderCandidateIndices(count: number, preferred?: number): number[] {
+    const ordered: number[] = [];
+    if (preferred !== undefined && preferred >= 0 && preferred < count) {
+      ordered.push(preferred);
+    }
+    for (let i = 0; i < count; i++) {
+      if (i !== preferred) ordered.push(i);
+    }
+    return ordered;
+  }
+
+  private getCandidateOffsets(
+    labelWidth: number,
+    labelHeight: number,
+    margin: number
+  ): Array<{ x: number; y: number }> {
+    const offsets: Array<{ x: number; y: number }> = [];
+    for (const ring of CANDIDATE_RINGS) {
+      const distance = margin * ring;
+      for (const dir of CANDIDATE_DIRECTIONS) {
+        let offsetX = dir.x * distance;
+        if (dir.x < 0) {
+          offsetX -= labelWidth;
+        } else if (dir.x === 0) {
+          offsetX -= labelWidth / 2;
+        }
+        const offsetY = dir.y * distance - labelHeight / 2;
+        offsets.push({ x: offsetX, y: offsetY });
+      }
+    }
+    return offsets;
+  }
+
+  private placeHiddenIndicator(
+    hiddenCount: number,
+    viewportWidth: number,
+    viewportHeight: number
+  ): PlacedLabel | undefined {
+    const text = `+${hiddenCount} hidden`;
+    const labelWidth = this.measureText(text);
+    const labelHeight = this.options.fontSize * this.options.lineHeight;
+    const margin = this.options.padding;
+
+    const positions = [
+      { x: margin, y: margin },
+      { x: viewportWidth - labelWidth - margin, y: margin },
+      { x: margin, y: viewportHeight - labelHeight - margin },
+      { x: viewportWidth - labelWidth - margin, y: viewportHeight - labelHeight - margin },
+    ];
+
+    for (const pos of positions) {
+      if (pos.x < 0 || pos.y < 0) continue;
+      const bounds = this.buildBounds(pos.x, pos.y, labelWidth, labelHeight);
+      if (!this.isWithinViewport(bounds, viewportWidth, viewportHeight)) continue;
+      if (this.grid.hasOverlap(bounds)) continue;
+
+      this.grid.insert(bounds);
+      return {
+        item: {
+          id: HIDDEN_INDICATOR_ID,
+          text,
+          anchorX: 0,
+          anchorY: 0,
+          priority: Number.POSITIVE_INFINITY,
+        },
+        screenX: pos.x,
+        screenY: pos.y,
+        anchorScreenX: pos.x,
+        anchorScreenY: pos.y,
+        needsLeaderLine: false,
+        bounds,
+      };
+    }
+
+    return undefined;
+  }
+
   private resolveDisplaced(
     displaced: PlacedLabel[],
     viewportWidth: number,
     viewportHeight: number,
     gridOffset: { x: number; y: number }
-  ): { leaderLabels: PlacedLabel[]; callouts: StackedCallout[]; newClusterAssignments: Map<string, string> } {
+  ): {
+    leaderLabels: PlacedLabel[];
+    callouts: StackedCallout[];
+    newClusterAssignments: Map<string, string>;
+    hiddenCount: number;
+  } {
     if (displaced.length === 0) {
-      return { leaderLabels: [], callouts: [], newClusterAssignments: new Map() };
+      return { leaderLabels: [], callouts: [], newClusterAssignments: new Map(), hiddenCount: 0 };
     }
 
     const clusterGrid = new Map<string, PlacedLabel[]>();
@@ -255,24 +361,58 @@ export class LabelPlacer {
 
     const leaderLabels: PlacedLabel[] = [];
     const callouts: StackedCallout[] = [];
+    let hiddenCount = 0;
 
-    for (const [_, cluster] of clusterGrid) {
-      if (cluster.length < this.options.calloutThreshold) {
+    for (const [clusterKey, cluster] of clusterGrid) {
+      const hasPrevCallout = cluster.some(label => this.prevPlacements.get(label.item.id)?.type === "callout");
+      const releaseThreshold = Math.max(2, this.options.calloutReleaseThreshold);
+      const shouldUseCallout =
+        cluster.length >= this.options.calloutThreshold ||
+        (hasPrevCallout && cluster.length >= releaseThreshold);
+
+      if (!shouldUseCallout) {
+        const unplaced: PlacedLabel[] = [];
         for (const label of cluster) {
           const placed = this.tryPlaceWithLeader(label, viewportWidth, viewportHeight);
           if (placed) {
             leaderLabels.push(placed);
+          } else {
+            unplaced.push(label);
           }
         }
-      } else {
-        const callout = this.createCallout(cluster, viewportWidth, viewportHeight);
+        if (unplaced.length > 0) {
+          const callout = this.createCallout(unplaced, viewportWidth, viewportHeight, clusterKey);
+          if (callout) {
+            callouts.push(callout);
+            for (const label of unplaced) {
+              this.newPlacements.set(label.item.id, { type: "callout" });
+            }
+          } else {
+            hiddenCount += unplaced.length;
+            for (const label of unplaced) {
+              this.newPlacements.set(label.item.id, { type: "hidden" });
+            }
+          }
+        }
+      }
+
+      if (shouldUseCallout) {
+        const callout = this.createCallout(cluster, viewportWidth, viewportHeight, clusterKey);
         if (callout) {
           callouts.push(callout);
+          for (const label of cluster) {
+            this.newPlacements.set(label.item.id, { type: "callout" });
+          }
+        } else {
+          hiddenCount += cluster.length;
+          for (const label of cluster) {
+            this.newPlacements.set(label.item.id, { type: "hidden" });
+          }
         }
       }
     }
 
-    return { leaderLabels, callouts, newClusterAssignments };
+    return { leaderLabels, callouts, newClusterAssignments, hiddenCount };
   }
 
   private tryPlaceWithLeader(
@@ -280,52 +420,28 @@ export class LabelPlacer {
     viewportWidth: number,
     viewportHeight: number
   ): PlacedLabel | null {
-    const { leaderLineMargin, padding, fontSize, lineHeight } = this.options;
+    const { leaderLineMargin, fontSize, lineHeight } = this.options;
     const labelWidth = this.measureText(label.item.text);
     const labelHeight = fontSize * lineHeight;
 
     const prevPlacement = this.prevPlacements.get(label.item.id);
-    const prevOffsetIndex = prevPlacement?.type === 'leader' ? prevPlacement.leaderOffsetIndex : undefined;
-
-    const indicesToTry: number[] = [];
-    if (prevOffsetIndex !== undefined && prevOffsetIndex >= 0 && prevOffsetIndex < LEADER_OFFSETS.length) {
-      indicesToTry.push(prevOffsetIndex);
-    }
-    for (let i = 0; i < LEADER_OFFSETS.length; i++) {
-      if (i !== prevOffsetIndex) {
-        indicesToTry.push(i);
-      }
-    }
+    const prevCandidateIndex = prevPlacement?.type === "leader" ? prevPlacement.candidateIndex : undefined;
+    const candidates = this.getCandidateOffsets(labelWidth, labelHeight, leaderLineMargin);
+    const indicesToTry = this.orderCandidateIndices(candidates.length, prevCandidateIndex);
 
     for (const idx of indicesToTry) {
-      const offsetDef = LEADER_OFFSETS[idx]!;
+      const offset = candidates[idx]!;
+      const screenX = label.anchorScreenX + offset.x;
+      const screenY = label.anchorScreenY + offset.y;
 
-      let offsetX: number;
-      if (offsetDef.x < 0) {
-        offsetX = offsetDef.x * leaderLineMargin - labelWidth;
-      } else {
-        offsetX = offsetDef.x * leaderLineMargin;
-      }
-      const offsetY = offsetDef.y * leaderLineMargin;
-
-      const screenX = label.anchorScreenX + offsetX;
-      const screenY = label.anchorScreenY + offsetY - labelHeight / 2;
-
-      if (screenX < 0 || screenX + labelWidth > viewportWidth ||
-          screenY < 0 || screenY + labelHeight > viewportHeight) {
+      const bounds = this.buildBounds(screenX, screenY, labelWidth, labelHeight);
+      if (!this.isWithinViewport(bounds, viewportWidth, viewportHeight)) {
         continue;
       }
 
-      const bounds: BoundingBox = {
-        x: screenX - padding,
-        y: screenY - padding,
-        width: labelWidth + padding * 2,
-        height: labelHeight + padding * 2,
-      };
-
       if (!this.grid.hasOverlap(bounds)) {
         this.grid.insert(bounds);
-        this.newPlacements.set(label.item.id, { type: 'leader', leaderOffsetIndex: idx });
+        this.newPlacements.set(label.item.id, { type: "leader", candidateIndex: idx });
         return {
           ...label,
           screenX,
@@ -342,9 +458,10 @@ export class LabelPlacer {
   private createCallout(
     cluster: PlacedLabel[],
     viewportWidth: number,
-    viewportHeight: number
+    viewportHeight: number,
+    clusterKey: string
   ): StackedCallout | null {
-    const { padding, fontSize, lineHeight, maxCalloutLabels, hysteresisMargin } = this.options;
+    const { padding, fontSize, lineHeight, maxCalloutLabels, leaderLineMargin } = this.options;
 
     const aircraftPositions = cluster.map(label => ({
       x: label.anchorScreenX,
@@ -366,6 +483,10 @@ export class LabelPlacer {
     const displayCount = Math.min(items.length, maxCalloutLabels);
     const hiddenCount = items.length - displayCount;
 
+    if (displayCount === 0) {
+      return null;
+    }
+
     const maxTextWidth = Math.max(
       ...items.slice(0, displayCount).map(i => this.measureText(i.text))
     );
@@ -374,78 +495,195 @@ export class LabelPlacer {
     const boxWidth = Math.max(maxTextWidth, moreWidth) + padding * 2;
     const boxHeight = (displayCount + (moreText ? 1 : 0)) * fontSize * lineHeight + padding * 2;
 
-    const clusterKey = items.map(i => i.id).sort().join(',');
+    if (boxWidth + padding * 2 > viewportWidth || boxHeight + padding * 2 > viewportHeight) {
+      return null;
+    }
+
+    const tryPlace = (candidateX: number, candidateY: number): { boxX: number; boxY: number } | null => {
+      const boxX = Math.max(padding, Math.min(viewportWidth - boxWidth - padding, candidateX));
+      const boxY = Math.max(padding, Math.min(viewportHeight - boxHeight - padding, candidateY));
+      const bounds = this.buildBounds(boxX, boxY, boxWidth, boxHeight);
+      if (!this.isWithinViewport(bounds, viewportWidth, viewportHeight)) return null;
+      if (this.grid.hasOverlap(bounds)) return null;
+      this.grid.insert(bounds);
+      return { boxX, boxY };
+    };
+
     const cached = this.prevCalloutPositions.get(clusterKey);
 
     if (cached) {
       // Apply cached offset to current centroid (box moves with panning)
-      const candidateX = centroidX + cached.boxOffsetX;
-      const candidateY = centroidY + cached.boxOffsetY;
-      const boxX = Math.max(padding, Math.min(viewportWidth - boxWidth - padding, candidateX));
-      const boxY = Math.max(padding, Math.min(viewportHeight - boxHeight - padding, candidateY));
-
-      const bounds: BoundingBox = { x: boxX, y: boxY, width: boxWidth, height: boxHeight };
-
-      if (!this.grid.hasOverlap(bounds)) {
-        this.grid.insert(bounds);
+      const placement = tryPlace(centroidX + cached.boxOffsetX, centroidY + cached.boxOffsetY);
+      if (placement) {
+        this.prevCalloutPositions.set(clusterKey, {
+          boxOffsetX: placement.boxX - centroidX,
+          boxOffsetY: placement.boxY - centroidY,
+          boxWidth,
+          boxHeight,
+        });
+        this.calloutLastSeen.set(clusterKey, this.frameIndex);
         return {
           items: items.slice(0, displayCount),
-          boxX,
-          boxY,
+          boxX: placement.boxX,
+          boxY: placement.boxY,
           boxWidth,
           boxHeight,
           centroidX,
           centroidY,
           aircraftPoints,
+          hiddenCount,
         };
       }
     }
 
-    const positions = [
-      { x: centroidX + 50, y: centroidY - boxHeight / 2 },
-      { x: centroidX - boxWidth - 50, y: centroidY - boxHeight / 2 },
-      { x: centroidX - boxWidth / 2, y: centroidY - boxHeight - 50 },
-      { x: centroidX - boxWidth / 2, y: centroidY + 50 },
-      { x: centroidX + 100, y: centroidY - boxHeight / 2 },
-      { x: centroidX - boxWidth - 100, y: centroidY - boxHeight / 2 },
-    ];
-
-    for (const pos of positions) {
-      const boxX = Math.max(padding, Math.min(viewportWidth - boxWidth - padding, pos.x));
-      const boxY = Math.max(padding, Math.min(viewportHeight - boxHeight - padding, pos.y));
-
-      const bounds: BoundingBox = { x: boxX, y: boxY, width: boxWidth, height: boxHeight };
-
-      if (!this.grid.hasOverlap(bounds)) {
-        this.grid.insert(bounds);
-        return {
-          items: items.slice(0, displayCount),
-          boxX,
-          boxY,
-          boxWidth,
-          boxHeight,
-          centroidX,
-          centroidY,
-          aircraftPoints,
-        };
+    for (const ring of CANDIDATE_RINGS) {
+      const distance = leaderLineMargin * ring;
+      for (const dir of CANDIDATE_DIRECTIONS) {
+        let candidateX = centroidX + dir.x * distance;
+        if (dir.x < 0) {
+          candidateX -= boxWidth;
+        } else if (dir.x === 0) {
+          candidateX -= boxWidth / 2;
+        }
+        const candidateY = centroidY + dir.y * distance - boxHeight / 2;
+        const placement = tryPlace(candidateX, candidateY);
+        if (placement) {
+          this.prevCalloutPositions.set(clusterKey, {
+            boxOffsetX: placement.boxX - centroidX,
+            boxOffsetY: placement.boxY - centroidY,
+            boxWidth,
+            boxHeight,
+          });
+          this.calloutLastSeen.set(clusterKey, this.frameIndex);
+          return {
+            items: items.slice(0, displayCount),
+            boxX: placement.boxX,
+            boxY: placement.boxY,
+            boxWidth,
+            boxHeight,
+            centroidX,
+            centroidY,
+            aircraftPoints,
+            hiddenCount,
+          };
+        }
       }
     }
 
-    const fallbackX = Math.max(padding, Math.min(viewportWidth - boxWidth - padding, positions[0]!.x));
-    const fallbackY = Math.max(padding, Math.min(viewportHeight - boxHeight - padding, positions[0]!.y));
+    const step = Math.max(this.options.fontSize * 6, leaderLineMargin);
+    const maxRing = Math.ceil(Math.max(viewportWidth, viewportHeight) / step);
+    const centerCellX = Math.round(centroidX / step);
+    const centerCellY = Math.round(centroidY / step);
 
-    const bounds: BoundingBox = { x: fallbackX, y: fallbackY, width: boxWidth, height: boxHeight };
-    this.grid.insert(bounds);
-
-    return {
-      items: items.slice(0, displayCount),
-      boxX: fallbackX,
-      boxY: fallbackY,
-      boxWidth,
-      boxHeight,
-      centroidX,
-      centroidY,
-      aircraftPoints,
+    const tryCell = (cellX: number, cellY: number): { boxX: number; boxY: number } | null => {
+      const candidateX = cellX * step - boxWidth / 2;
+      const candidateY = cellY * step - boxHeight / 2;
+      return tryPlace(candidateX, candidateY);
     };
+
+    for (let ring = 0; ring <= maxRing; ring++) {
+      for (let dx = -ring; dx <= ring; dx++) {
+        const top = tryCell(centerCellX + dx, centerCellY - ring);
+        if (top) {
+          this.prevCalloutPositions.set(clusterKey, {
+            boxOffsetX: top.boxX - centroidX,
+            boxOffsetY: top.boxY - centroidY,
+            boxWidth,
+            boxHeight,
+          });
+          this.calloutLastSeen.set(clusterKey, this.frameIndex);
+          return {
+            items: items.slice(0, displayCount),
+            boxX: top.boxX,
+            boxY: top.boxY,
+            boxWidth,
+            boxHeight,
+            centroidX,
+            centroidY,
+            aircraftPoints,
+            hiddenCount,
+          };
+        }
+        if (ring === 0) continue;
+        const bottom = tryCell(centerCellX + dx, centerCellY + ring);
+        if (bottom) {
+          this.prevCalloutPositions.set(clusterKey, {
+            boxOffsetX: bottom.boxX - centroidX,
+            boxOffsetY: bottom.boxY - centroidY,
+            boxWidth,
+            boxHeight,
+          });
+          this.calloutLastSeen.set(clusterKey, this.frameIndex);
+          return {
+            items: items.slice(0, displayCount),
+            boxX: bottom.boxX,
+            boxY: bottom.boxY,
+            boxWidth,
+            boxHeight,
+            centroidX,
+            centroidY,
+            aircraftPoints,
+            hiddenCount,
+          };
+        }
+      }
+      for (let dy = -ring + 1; dy <= ring - 1; dy++) {
+        if (ring === 0) break;
+        const left = tryCell(centerCellX - ring, centerCellY + dy);
+        if (left) {
+          this.prevCalloutPositions.set(clusterKey, {
+            boxOffsetX: left.boxX - centroidX,
+            boxOffsetY: left.boxY - centroidY,
+            boxWidth,
+            boxHeight,
+          });
+          this.calloutLastSeen.set(clusterKey, this.frameIndex);
+          return {
+            items: items.slice(0, displayCount),
+            boxX: left.boxX,
+            boxY: left.boxY,
+            boxWidth,
+            boxHeight,
+            centroidX,
+            centroidY,
+            aircraftPoints,
+            hiddenCount,
+          };
+        }
+        const right = tryCell(centerCellX + ring, centerCellY + dy);
+        if (right) {
+          this.prevCalloutPositions.set(clusterKey, {
+            boxOffsetX: right.boxX - centroidX,
+            boxOffsetY: right.boxY - centroidY,
+            boxWidth,
+            boxHeight,
+          });
+          this.calloutLastSeen.set(clusterKey, this.frameIndex);
+          return {
+            items: items.slice(0, displayCount),
+            boxX: right.boxX,
+            boxY: right.boxY,
+            boxWidth,
+            boxHeight,
+            centroidX,
+            centroidY,
+            aircraftPoints,
+            hiddenCount,
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private pruneCalloutCache(): void {
+    if (this.calloutLastSeen.size === 0) return;
+    for (const [key, lastSeen] of this.calloutLastSeen) {
+      if (this.frameIndex - lastSeen > CALLOUT_CACHE_FRAMES) {
+        this.calloutLastSeen.delete(key);
+        this.prevCalloutPositions.delete(key);
+      }
+    }
   }
 }

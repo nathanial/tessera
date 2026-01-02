@@ -134,6 +134,13 @@ export class LabelRenderer {
 
     // Render stacked callouts
     this.renderCallouts(draw, sdfRenderer, placement, matrix, w, h);
+
+    // Render hidden indicator (if any)
+    if (placement.hiddenIndicator) {
+      const indicator = placement.hiddenIndicator;
+      const world = screenToWorld(indicator.screenX, indicator.screenY + LABEL_FONT_SIZE / 2, matrix, w, h);
+      sdfRenderer.addText(indicator.item.text, world.worldX, world.worldY, labelStyle);
+    }
   }
 
   private renderCallouts(
@@ -211,6 +218,11 @@ export class LabelRenderer {
         const textY = callout.boxY + padding + (i + 0.5) * lineHeight;
         const textWorld = screenToWorld(callout.boxX + padding, textY, matrix, w, h);
         sdfRenderer.addText(callout.items[i]!.text, textWorld.worldX, textWorld.worldY, labelStyle);
+      }
+      if (callout.hiddenCount > 0) {
+        const textY = callout.boxY + padding + (callout.items.length + 0.5) * lineHeight;
+        const textWorld = screenToWorld(callout.boxX + padding, textY, matrix, w, h);
+        sdfRenderer.addText(`+${callout.hiddenCount} more`, textWorld.worldX, textWorld.worldY, labelStyle);
       }
     }
     draw.end();

@@ -31,12 +31,15 @@ export interface StackedCallout {
   centroidX: number;    // Screen position of cluster centroid (for branching tree)
   centroidY: number;
   aircraftPoints: Array<{ screenX: number; screenY: number }>;  // All aircraft positions for branching lines
+  hiddenCount: number;  // Count of labels represented by +N more
 }
 
 export interface PlacementResult {
   directLabels: PlacedLabel[];       // Labels placed without leader lines
   leaderLabels: PlacedLabel[];       // Labels with leader lines
   callouts: StackedCallout[];        // Stacked callouts for dense areas
+  hiddenCount: number;               // Labels not represented on screen
+  hiddenIndicator?: PlacedLabel;     // Optional on-screen indicator for hidden labels
 }
 
 export interface PlacementOptions {
@@ -45,6 +48,7 @@ export interface PlacementOptions {
   lineHeight: number;         // Line height as fraction of fontSize
   padding: number;            // Padding around labels in pixels
   calloutThreshold: number;   // Number of overlapping labels before using callout
+  calloutReleaseThreshold: number; // Cluster size below which callout can dissolve
   maxCalloutLabels: number;   // Max labels shown in callout before "+N more"
   leaderLineMargin: number;   // Min distance to displace label
   hysteresisMargin: number;   // Pixels - must move this far past boundary to switch clusters
@@ -56,6 +60,7 @@ export const DEFAULT_OPTIONS: PlacementOptions = {
   lineHeight: 1.2,
   padding: 4,
   calloutThreshold: 4,
+  calloutReleaseThreshold: 3,
   maxCalloutLabels: 5,
   leaderLineMargin: 30,
   hysteresisMargin: 20,
@@ -74,8 +79,8 @@ export interface CachedCallout {
 
 /** Tracks placement decision for each label for frame-to-frame stability */
 export interface CachedPlacement {
-  type: 'direct' | 'leader' | 'callout';
-  leaderOffsetIndex?: number;  // Which offset position was used for leader lines
+  type: 'direct' | 'leader' | 'callout' | 'hidden';
+  candidateIndex?: number;  // Which candidate position was used for leader labels
 }
 
 /** Standard offsets for leader line placement (indexed for caching) */
