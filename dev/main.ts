@@ -14,6 +14,7 @@ import { getCommandLabelStyle, renderCommandHulls, renderSelectionBox, renderSel
 import { screenToWorld } from "./CoordinateUtils";
 import { DashedLineRenderer, DashedRingRenderer } from "./DashedSelectionRenderers";
 import { SensorConeRenderer } from "./SensorConeRenderer";
+import { TrailRenderer } from "./TrailRenderer";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -39,6 +40,7 @@ const dashedLineRenderer = new DashedLineRenderer(tessera.gl);
 const commandLineRenderer = new DashedLineRenderer(tessera.gl);
 const dashedRingRenderer = new DashedRingRenderer(tessera.gl);
 const sensorConeRenderer = new SensorConeRenderer(tessera.gl);
+const trailRenderer = new TrailRenderer(tessera.gl);
 
 const labelToggleButton = document.getElementById("toggle-labels") as HTMLButtonElement | null;
 let showLabels = true;
@@ -67,6 +69,15 @@ if (sensorToggleButton) {
   });
 }
 
+const trailsToggleButton = document.getElementById("toggle-trails") as HTMLButtonElement | null;
+let showTrails = true;
+if (trailsToggleButton) {
+  trailsToggleButton.addEventListener("click", () => {
+    showTrails = !showTrails;
+    trailsToggleButton.textContent = showTrails ? "Trails: On" : "Trails: Off";
+  });
+}
+
 const speedButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".speed-button"));
 if (speedButtons.length > 0) {
   const setActiveSpeed = (value: number) => {
@@ -86,7 +97,7 @@ if (speedButtons.length > 0) {
   }
 
   const initialSpeedButton = speedButtons.find((button) => button.classList.contains("active"));
-  const initialSpeed = initialSpeedButton ? Number(initialSpeedButton.dataset.speed) : 0.1;
+  const initialSpeed = initialSpeedButton ? Number(initialSpeedButton.dataset.speed) : 1;
   if (Number.isFinite(initialSpeed)) {
     setActiveSpeed(initialSpeed);
   }
@@ -195,7 +206,6 @@ tessera.render = function () {
   // Update animations
   borderRenderer.update(dt);
   aircraftRenderer.update();
-
   // Render tiles first
   originalRender();
 
@@ -203,6 +213,13 @@ tessera.render = function () {
   const w = this.canvas.width;
   const h = this.canvas.height;
   const bounds = this.camera.getVisibleBounds(w, h);
+
+  // Calculate aircraft size based on zoom
+  const viewWidth = bounds.right - bounds.left;
+  const aircraftSize = aircraftRenderer.getAircraftSize(this.camera.zoom, viewWidth, w);
+
+  // Update trails with world-space sampling
+  aircraftRenderer.updateTrails(now / 1000, aircraftRenderer.getTrailSampleDistance(aircraftSize));
 
   // ============================================
   // RENDER ALL LAYERS
@@ -215,9 +232,15 @@ tessera.render = function () {
 
   draw.end();
 
-  // Calculate aircraft size based on zoom
-  const viewWidth = bounds.right - bounds.left;
-  const aircraftSize = aircraftRenderer.getAircraftSize(this.camera.zoom, viewWidth, w);
+  if (showTrails) {
+    aircraftRenderer.renderTrails(
+      trailRenderer,
+      matrix,
+      now / 1000,
+      bounds,
+      aircraftRenderer.getTrailStampSize(aircraftSize)
+    );
+  }
 
   // Render sensor cones
   if (showSensors) {

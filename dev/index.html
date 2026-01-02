@@ -39,7 +39,6 @@
         background: #ffb700;
       }
       #toggle-groups {
-        margin-top: 6px;
         padding: 8px 12px;
         border: 2px solid #1fd17c;
         background: #1fd17c;
@@ -51,16 +50,32 @@
         background: #12b96c;
       }
       #toggle-sensors {
-        margin-top: 6px;
         padding: 8px 12px;
-        border: 2px solid #c24bff;
-        background: #c24bff;
-        color: #000000;
+        border: 2px solid #9b59ff;
+        background: #9b59ff;
+        color: #ffffff;
         font-size: 14px;
         cursor: pointer;
       }
       #toggle-sensors:hover {
-        background: #a632e6;
+        background: #8a42ff;
+      }
+      #toggle-trails {
+        padding: 8px 12px;
+        border: 2px solid #00c6ff;
+        background: #00c6ff;
+        color: #000000;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      #toggle-trails:hover {
+        background: #00b0e3;
+      }
+      #toggle-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+        margin-top: 8px;
       }
       #speed-controls {
         margin-top: 8px;
@@ -132,12 +147,15 @@
   <body>
     <canvas id="canvas"></canvas>
     <div id="ui-toggle">
-      <button id="toggle-labels" type="button">Labels: On</button>
-      <button id="toggle-groups" type="button">Groups: On</button>
-      <button id="toggle-sensors" type="button">Sensors: On</button>
+      <div id="toggle-grid">
+        <button id="toggle-labels" type="button">Labels: On</button>
+        <button id="toggle-groups" type="button">Groups: On</button>
+        <button id="toggle-sensors" type="button">Sensors: On</button>
+        <button id="toggle-trails" type="button">Trails: On</button>
+      </div>
       <div id="speed-controls">
-        <button class="speed-button active" data-speed="0.1" type="button">0.1x</button>
-        <button class="speed-button" data-speed="1" type="button">1x</button>
+        <button class="speed-button" data-speed="0.1" type="button">0.1x</button>
+        <button class="speed-button active" data-speed="1" type="button">1x</button>
         <button class="speed-button" data-speed="5" type="button">5x</button>
         <button class="speed-button" data-speed="10" type="button">10x</button>
         <button class="speed-button" data-speed="20" type="button">20x</button>

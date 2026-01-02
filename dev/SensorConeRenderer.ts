@@ -228,7 +228,7 @@ export class SensorConeRenderer {
     gl.uniform1f(this.waveFrequencyUniform, 4.5);
     gl.uniform1f(this.waveSharpnessUniform, 2.6);
     gl.uniform1f(this.pulseStrengthUniform, 1.2);
-    gl.uniform1f(this.pulseSpeedUniform, 9.0 * this.speedMultiplier);
+    gl.uniform1f(this.pulseSpeedUniform, 0.9 * this.speedMultiplier);
     gl.uniform1f(this.rimWidthUniform, 0.08);
     gl.uniform1f(this.rimStrengthUniform, 0.7);
 
