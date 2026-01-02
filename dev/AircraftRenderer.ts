@@ -5,7 +5,7 @@
 
 import earcut from "earcut";
 import type { DrawContext } from "../src/index";
-import { ADSBLayer, getAltitudeColor } from "./adsb";
+import { ADSBLayer, getAltitudeColor, type CommandGroup } from "./adsb";
 import { getWrappedX } from "./CoordinateUtils";
 
 // ============================================
@@ -51,6 +51,10 @@ export class AircraftRenderer {
 
   setDestinationForAircraft(ids: Set<string>, destX: number, destY: number): void {
     this.adsbLayer.setDestinationForAircraft(ids, destX, destY);
+  }
+
+  getCommandGroups(): CommandGroup[] {
+    return this.adsbLayer.getCommandGroups();
   }
 
   /**

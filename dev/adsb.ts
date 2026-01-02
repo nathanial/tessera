@@ -23,6 +23,13 @@ export interface Aircraft {
   onGround: boolean;
 }
 
+export interface CommandGroup {
+  id: string;
+  memberIds: Set<string>;
+  destX: number;
+  destY: number;
+}
+
 // Airport definition
 interface Airport {
   code: string;
@@ -113,6 +120,7 @@ interface SimulatedAircraft extends Aircraft {
   progress: number; // 0-1 along route
   cruiseAltitude: number;
   baseVelocity: number;
+  commandGroupId?: string | null;
 }
 
 /**
@@ -283,6 +291,8 @@ export class ADSBLayer {
   private simAircraft: SimulatedAircraft[] = [];
   private lastUpdateTime: number = 0;
   private speedMultiplier: number = DEFAULT_SPEED_MULTIPLIER;
+  private commandGroups: Map<string, CommandGroup> = new Map();
+  private commandGroupCounter = 0;
 
   constructor(private aircraftCount: number = 500) {
     this.generateAircraft();
@@ -407,6 +417,9 @@ export class ADSBLayer {
 
       // Check if arrived at destination
       if (ac.progress >= 1) {
+        if (ac.commandGroupId) {
+          this.removeFromCommandGroup(ac);
+        }
         // Start new flight from destination
         const newOrigin = ac.destination;
         const newDestination = pickDestination(newOrigin);
@@ -476,9 +489,19 @@ export class ADSBLayer {
     const wrappedX = ((destX % 1) + 1) % 1;
     const clampedY = Math.min(1, Math.max(0, destY));
     const { lon: destLon, lat: destLat } = tesseraToLonLat(wrappedX, clampedY);
+    const groupId = `go-${++this.commandGroupCounter}`;
+    const group: CommandGroup = {
+      id: groupId,
+      memberIds: new Set<string>(),
+      destX: wrappedX,
+      destY: clampedY,
+    };
 
     for (const ac of this.simAircraft) {
       if (!ids.has(ac.icao24)) continue;
+      if (ac.commandGroupId) {
+        this.removeFromCommandGroup(ac);
+      }
 
       const origin: Airport = {
         code: "CUR",
@@ -501,15 +524,37 @@ export class ADSBLayer {
       ac.destX = wrappedX;
       ac.destY = clampedY;
       ac.heading = calculateHeadingFromTessera(ac.x, ac.y, ac.destX, ac.destY);
+      ac.commandGroupId = groupId;
 
       const distance = calculateDistance(origin.lon, origin.lat, destination.lon, destination.lat);
       ac.cruiseAltitude =
         distance > 3000000
           ? 10000 + Math.random() * 2000
           : 8000 + Math.random() * 2000;
+
+      group.memberIds.add(ac.icao24);
     }
 
+    if (group.memberIds.size > 0) {
+      this.commandGroups.set(groupId, group);
+    }
     this.updatePublicList();
+  }
+
+  getCommandGroups(): CommandGroup[] {
+    return Array.from(this.commandGroups.values());
+  }
+
+  private removeFromCommandGroup(ac: SimulatedAircraft): void {
+    const groupId = ac.commandGroupId;
+    if (!groupId) return;
+    const group = this.commandGroups.get(groupId);
+    if (!group) return;
+    group.memberIds.delete(ac.icao24);
+    if (group.memberIds.size === 0) {
+      this.commandGroups.delete(groupId);
+    }
+    ac.commandGroupId = null;
   }
 }
 

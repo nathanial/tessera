@@ -10,7 +10,7 @@ import { AircraftRenderer } from "./AircraftRenderer";
 import { LabelRenderer } from "./LabelRenderer";
 import { renderDebugGrid, renderStatsOverlay } from "./UIController";
 import { setupSelectionControls } from "./SelectionController";
-import { renderSelectionBox, renderSelectionHighlights } from "./SelectionRenderer";
+import { getCommandLabelStyle, renderCommandHulls, renderSelectionBox, renderSelectionHighlights } from "./SelectionRenderer";
 import { screenToWorld } from "./CoordinateUtils";
 import { DashedLineRenderer, DashedRingRenderer } from "./DashedSelectionRenderers";
 
@@ -35,6 +35,7 @@ const aircraftRenderer = new AircraftRenderer(10000); // 10k simulated aircraft
 const labelRenderer = new LabelRenderer();
 const selectionState = setupSelectionControls(tessera, canvas, aircraftRenderer);
 const dashedLineRenderer = new DashedLineRenderer(tessera.gl);
+const commandLineRenderer = new DashedLineRenderer(tessera.gl);
 const dashedRingRenderer = new DashedRingRenderer(tessera.gl);
 
 const labelToggleButton = document.getElementById("toggle-labels") as HTMLButtonElement | null;
@@ -201,6 +202,18 @@ tessera.render = function () {
 
   draw.end();
 
+  const commandLabels = renderCommandHulls(
+    draw,
+    matrix,
+    w,
+    h,
+    bounds,
+    aircraftRenderer,
+    aircraftRenderer.getCommandGroups(),
+    commandLineRenderer,
+    now / 1000
+  );
+
   // Render selection highlights under labels
   renderSelectionHighlights(
     draw,
@@ -234,6 +247,13 @@ tessera.render = function () {
       this.camera.zoom,
       controlState.isZooming
     );
+  }
+
+  if (commandLabels.length > 0) {
+    const commandLabelStyle = getCommandLabelStyle();
+    for (const label of commandLabels) {
+      sdfRenderer.addText(label.text, label.x, label.y, commandLabelStyle);
+    }
   }
 
   // ============================================
