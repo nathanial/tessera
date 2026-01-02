@@ -13,6 +13,7 @@ import { setupSelectionControls } from "./SelectionController";
 import { getCommandLabelStyle, renderCommandHulls, renderSelectionBox, renderSelectionHighlights } from "./SelectionRenderer";
 import { screenToWorld } from "./CoordinateUtils";
 import { DashedLineRenderer, DashedRingRenderer } from "./DashedSelectionRenderers";
+import { SensorConeRenderer } from "./SensorConeRenderer";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -37,6 +38,7 @@ const selectionState = setupSelectionControls(tessera, canvas, aircraftRenderer)
 const dashedLineRenderer = new DashedLineRenderer(tessera.gl);
 const commandLineRenderer = new DashedLineRenderer(tessera.gl);
 const dashedRingRenderer = new DashedRingRenderer(tessera.gl);
+const sensorConeRenderer = new SensorConeRenderer(tessera.gl);
 
 const labelToggleButton = document.getElementById("toggle-labels") as HTMLButtonElement | null;
 let showLabels = true;
@@ -53,6 +55,15 @@ if (groupToggleButton) {
   groupToggleButton.addEventListener("click", () => {
     showGroups = !showGroups;
     groupToggleButton.textContent = showGroups ? "Groups: On" : "Groups: Off";
+  });
+}
+
+const sensorToggleButton = document.getElementById("toggle-sensors") as HTMLButtonElement | null;
+let showSensors = true;
+if (sensorToggleButton) {
+  sensorToggleButton.addEventListener("click", () => {
+    showSensors = !showSensors;
+    sensorToggleButton.textContent = showSensors ? "Sensors: On" : "Sensors: Off";
   });
 }
 
@@ -202,9 +213,24 @@ tessera.render = function () {
   // Render border shapes
   borderRenderer.render(draw, bounds);
 
+  draw.end();
+
   // Calculate aircraft size based on zoom
   const viewWidth = bounds.right - bounds.left;
   const aircraftSize = aircraftRenderer.getAircraftSize(this.camera.zoom, viewWidth, w);
+
+  // Render sensor cones
+  if (showSensors) {
+    aircraftRenderer.renderSensors(
+      sensorConeRenderer,
+      matrix,
+      now / 1000,
+      bounds,
+      aircraftSize
+    );
+  }
+
+  draw.begin(matrix, w, h);
 
   // Render aircraft
   aircraftRenderer.render(draw, bounds, aircraftSize);
