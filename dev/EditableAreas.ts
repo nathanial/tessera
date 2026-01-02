@@ -3,7 +3,7 @@
  */
 
 import type { DrawContext } from "../src/index";
-import { lonLatToTessera, type Tessera } from "../src/index";
+import { lonLatToTessera } from "../src/index";
 import type { AircraftRenderer } from "./AircraftRenderer";
 import { screenToWorld, worldToScreen } from "./CoordinateUtils";
 import type { SDFCircleRenderer } from "./SDFCircleRenderer";
@@ -135,6 +135,7 @@ interface DragState {
   mode: "move" | "handle";
   handle?: AreaHandle;
   lastWorld: Vec2;
+  paneId: string;
 }
 
 interface AreaHandle {
@@ -165,6 +166,22 @@ interface Bounds {
   top: number;
   bottom: number;
 }
+
+export interface PaneInteractionContext {
+  paneId: string;
+  localX: number;
+  localY: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  matrix: Float32Array;
+  bounds: Bounds;
+}
+
+export type PaneContextProvider = (
+  screenX: number,
+  screenY: number,
+  paneId?: string | null
+) => PaneInteractionContext | null;
 
 interface HeatFlowSegment {
   baseX: number;
@@ -1432,10 +1449,11 @@ export function createEditableAreasState(): EditableAreasState {
 }
 
 export function setupEditableAreasControls(
-  tessera: Tessera,
   canvas: HTMLCanvasElement,
   aircraftRenderer: AircraftRenderer,
-  state: EditableAreasState
+  state: EditableAreasState,
+  getContext: PaneContextProvider,
+  requestRender: () => void
 ): EditableAreasState {
   const getPointer = (event: MouseEvent) => {
     const rect = canvas.getBoundingClientRect();
@@ -1446,13 +1464,12 @@ export function setupEditableAreasControls(
     };
   };
 
-  const getWorld = (screenX: number, screenY: number) => {
-    const matrix = tessera.camera.getMatrix(canvas.width, canvas.height);
-    const world = screenToWorld(screenX, screenY, matrix, canvas.width, canvas.height);
-    return { world, matrix };
-  };
-
-  const beginDrag = (event: MouseEvent, handle: HandlePosition | null, world: Vec2) => {
+  const beginDrag = (
+    event: MouseEvent,
+    handle: HandlePosition | null,
+    world: Vec2,
+    paneId: string
+  ) => {
     if (handle) {
       state.selectedId = handle.handle.areaId;
       state.activeHandle = handle.handle;
@@ -1461,6 +1478,7 @@ export function setupEditableAreasControls(
         mode: "handle",
         handle: handle.handle,
         lastWorld: { x: world.x, y: world.y },
+        paneId,
       };
     } else {
       const hit = state.areas.find((area) => hitTestArea(area, world));
@@ -1476,13 +1494,14 @@ export function setupEditableAreasControls(
         areaId: hit.id,
         mode: "move",
         lastWorld: { x: world.x, y: world.y },
+        paneId,
       };
     }
 
     event.preventDefault();
     event.stopImmediatePropagation();
     canvas.style.cursor = "grabbing";
-    tessera.requestRender();
+    requestRender();
   };
 
   canvas.addEventListener(
@@ -1491,16 +1510,24 @@ export function setupEditableAreasControls(
       if (!state.enabled) return;
       if (event.button !== 0 || event.shiftKey) return;
       const { screenX, screenY } = getPointer(event);
-      const { world, matrix } = getWorld(screenX, screenY);
+      const context = getContext(screenX, screenY);
+      if (!context) return;
+      const world = screenToWorld(
+        context.localX,
+        context.localY,
+        context.matrix,
+        context.viewportWidth,
+        context.viewportHeight
+      );
       const handle = findHandleAtScreen(
         state.areas,
-        screenX,
-        screenY,
-        matrix,
-        canvas.width,
-        canvas.height
+        context.localX,
+        context.localY,
+        context.matrix,
+        context.viewportWidth,
+        context.viewportHeight
       );
-      beginDrag(event, handle, { x: world.worldX, y: world.worldY });
+      beginDrag(event, handle, { x: world.worldX, y: world.worldY }, context.paneId);
     },
     { capture: true }
   );
@@ -1509,7 +1536,15 @@ export function setupEditableAreasControls(
     if (!state.enabled) return;
     if (!state.dragState) return;
     const { screenX, screenY } = getPointer(event);
-    const world = screenToWorld(screenX, screenY, tessera.camera.getMatrix(canvas.width, canvas.height), canvas.width, canvas.height);
+    const context = getContext(screenX, screenY, state.dragState.paneId);
+    if (!context) return;
+    const world = screenToWorld(
+      context.localX,
+      context.localY,
+      context.matrix,
+      context.viewportWidth,
+      context.viewportHeight
+    );
     const area = state.areas.find((item) => item.id === state.dragState?.areaId);
     if (!area) return;
 
@@ -1523,7 +1558,7 @@ export function setupEditableAreasControls(
       applyHandleDrag(area, state.dragState.handle, { x: world.worldX, y: world.worldY }, aircraftPoints);
     }
 
-    tessera.requestRender();
+    requestRender();
   });
 
   window.addEventListener("mouseup", () => {
@@ -1532,7 +1567,7 @@ export function setupEditableAreasControls(
       state.dragState = null;
       state.activeHandle = null;
       canvas.style.cursor = "grab";
-      tessera.requestRender();
+      requestRender();
     }
   });
 

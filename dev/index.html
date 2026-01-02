@@ -100,6 +100,13 @@
         display: flex;
         justify-content: flex-end;
       }
+      #pane-controls {
+        margin-top: 8px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
       #selection-help {
         margin-top: 8px;
         padding: 6px 8px;
@@ -158,6 +165,24 @@
         border-color: #0096b5;
         color: #ffffff;
       }
+      .pane-button {
+        padding: 6px 10px;
+        border: 2px solid #ff6b6b;
+        background: #ff6b6b;
+        color: #000000;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .pane-button:hover {
+        background: #f25555;
+      }
+      #reset-panes {
+        border-color: #ffd166;
+        background: #ffd166;
+      }
+      #reset-panes:hover {
+        background: #f5bf4f;
+      }
     </style>
   </head>
   <body>
@@ -178,6 +203,11 @@
         <button class="speed-button" data-speed="5" type="button">5x</button>
         <button class="speed-button" data-speed="10" type="button">10x</button>
         <button class="speed-button" data-speed="20" type="button">20x</button>
+      </div>
+      <div id="pane-controls">
+        <button id="split-horizontal" class="pane-button" type="button">Split H</button>
+        <button id="split-vertical" class="pane-button" type="button">Split V</button>
+        <button id="reset-panes" class="pane-button" type="button">Reset</button>
       </div>
       <div id="selection-help">
         Shift + drag to select aircraft. Click empty space to clear selection. Drag to pan.

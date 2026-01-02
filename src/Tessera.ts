@@ -183,6 +183,56 @@ export class Tessera {
     this.quadGeometry.unbind();
   }
 
+  /**
+   * Render tiles for a given camera and viewport size.
+   * Assumes viewport/scissor are already configured by the caller.
+   */
+  renderTiles(camera: Camera, viewportWidth: number, viewportHeight: number): void {
+    const gl = this.gl;
+
+    const tiles = this.tileManager.getVisibleTiles(
+      camera.centerX,
+      camera.centerY,
+      camera.zoom,
+      viewportWidth,
+      viewportHeight
+    );
+
+    gl.useProgram(this.program);
+    this.quadGeometry.bind();
+
+    const matrix = camera.getMatrix(viewportWidth, viewportHeight);
+    gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
+
+    const tileZoom = Math.floor(camera.zoom);
+    const numTiles = Math.pow(2, tileZoom);
+    const tileScale = 1 / numTiles;
+    gl.uniform1f(this.uniforms.tileScale, tileScale);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(this.uniforms.texture, 0);
+
+    for (const tile of tiles) {
+      const result = this.tileManager.getTileWithFallback(tile.z, tile.x, tile.y);
+      if (!result) {
+        this.requestRender();
+        continue;
+      }
+
+      if (!result.isExact) {
+        this.requestRender();
+      }
+
+      gl.bindTexture(gl.TEXTURE_2D, result.texture);
+      gl.uniform2f(this.uniforms.tileOffset, tile.worldX, tile.y);
+      gl.uniform2f(this.uniforms.uvOffset, result.uvOffset[0], result.uvOffset[1]);
+      gl.uniform1f(this.uniforms.uvScale, result.uvScale);
+      this.quadGeometry.draw();
+    }
+
+    this.quadGeometry.unbind();
+  }
+
   /** Start the render loop */
   start(): void {
     if (this.animationId !== null) return;
