@@ -77,6 +77,7 @@ export interface CachedCallout {
   boxHeight: number;
   centroidOffsetX?: number; // Centroid offset relative to cluster cell center
   centroidOffsetY?: number;
+  itemIds?: string[]; // Cached membership for stable callouts during zoom
 }
 
 /** Tracks placement decision for each label for frame-to-frame stability */

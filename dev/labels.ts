@@ -102,8 +102,12 @@ export class LabelPlacer {
     viewportWidth: number,
     viewportHeight: number,
     labelOffsetX: number = 10,
-    gridOffset: { x: number; y: number } = { x: 0, y: 0 }
+    gridOffset: { x: number; y: number } = { x: 0, y: 0 },
+    layoutOptions: { lockLayout?: boolean } = {}
   ): PlacementResult {
+    if (layoutOptions.lockLayout) {
+      return this.placeLocked(items, worldToScreen, viewportWidth, viewportHeight, labelOffsetX, gridOffset);
+    }
     this.frameIndex += 1;
     this.pruneCalloutCache();
     this.grid.clear();
@@ -211,6 +215,143 @@ export class LabelPlacer {
 
     this.widthCache.set(key, width);
     return width;
+  }
+
+  private placeLocked(
+    items: LabelItem[],
+    worldToScreen: (x: number, y: number) => { screenX: number; screenY: number },
+    viewportWidth: number,
+    viewportHeight: number,
+    labelOffsetX: number,
+    gridOffset: { x: number; y: number }
+  ): PlacementResult {
+    this.grid.clear();
+
+    const itemById = new Map(items.map(item => [item.id, item]));
+    const calloutItemIds = new Set<string>();
+    const callouts: StackedCallout[] = [];
+    let hiddenCount = 0;
+
+    for (const [clusterKey, cached] of this.prevCalloutPositions) {
+      if (!cached.itemIds || cached.itemIds.length === 0) continue;
+
+      const visibleItems = cached.itemIds
+        .map(id => itemById.get(id))
+        .filter((item): item is LabelItem => item !== undefined);
+
+      if (visibleItems.length === 0) continue;
+
+      for (const item of visibleItems) {
+        calloutItemIds.add(item.id);
+      }
+
+      let centroidX = 0;
+      let centroidY = 0;
+      const aircraftPoints: Array<{ screenX: number; screenY: number }> = [];
+
+      for (const item of visibleItems) {
+        const anchor = worldToScreen(item.anchorX, item.anchorY);
+        centroidX += anchor.screenX;
+        centroidY += anchor.screenY;
+        aircraftPoints.push({ screenX: anchor.screenX, screenY: anchor.screenY });
+      }
+
+      centroidX /= visibleItems.length;
+      centroidY /= visibleItems.length;
+
+      const displayCount = Math.min(visibleItems.length, this.options.maxCalloutLabels);
+      const hiddenCountLocal = visibleItems.length - displayCount;
+      const itemsToShow = visibleItems.slice(0, displayCount);
+
+      const boxWidth = cached.boxWidth;
+      const boxHeight = cached.boxHeight;
+      let boxX = centroidX + cached.boxOffsetX;
+      let boxY = centroidY + cached.boxOffsetY;
+
+      boxX = Math.max(this.options.padding, Math.min(viewportWidth - boxWidth - this.options.padding, boxX));
+      boxY = Math.max(this.options.padding, Math.min(viewportHeight - boxHeight - this.options.padding, boxY));
+
+      const bounds = this.buildBounds(boxX, boxY, boxWidth, boxHeight);
+      if (this.isWithinViewport(bounds, viewportWidth, viewportHeight) && !this.grid.hasOverlap(bounds)) {
+        this.grid.insert(bounds);
+        callouts.push({
+          items: itemsToShow,
+          boxX,
+          boxY,
+          boxWidth,
+          boxHeight,
+          centroidX,
+          centroidY,
+          aircraftPoints,
+          hiddenCount: hiddenCountLocal,
+        });
+      }
+    }
+
+    const directLabels: PlacedLabel[] = [];
+    const leaderLabels: PlacedLabel[] = [];
+
+    for (const item of items) {
+      if (calloutItemIds.has(item.id)) continue;
+
+      const anchor = worldToScreen(item.anchorX, item.anchorY);
+      if (anchor.screenX < -100 || anchor.screenX > viewportWidth + 100 ||
+          anchor.screenY < -100 || anchor.screenY > viewportHeight + 100) {
+        continue;
+      }
+
+      const labelWidth = this.measureText(item.text);
+      const labelHeight = this.options.fontSize * this.options.lineHeight;
+      const prevPlacement = this.prevPlacements.get(item.id);
+
+      if (prevPlacement?.type === "leader" && prevPlacement.candidateIndex !== undefined) {
+        const candidates = this.getCandidateOffsets(labelWidth, labelHeight, this.options.leaderLineMargin);
+        const candidate = candidates[prevPlacement.candidateIndex];
+        if (candidate) {
+          const screenX = anchor.screenX + candidate.x;
+          const screenY = anchor.screenY + candidate.y;
+          const bounds = this.buildBounds(screenX, screenY, labelWidth, labelHeight);
+          if (this.isWithinViewport(bounds, viewportWidth, viewportHeight) && !this.grid.hasOverlap(bounds)) {
+            this.grid.insert(bounds);
+            leaderLabels.push({
+              item,
+              screenX,
+              screenY,
+              anchorScreenX: anchor.screenX,
+              anchorScreenY: anchor.screenY,
+              needsLeaderLine: true,
+              bounds,
+            });
+            continue;
+          }
+        }
+      }
+
+      const preferredX = anchor.screenX + labelOffsetX;
+      const preferredY = anchor.screenY - labelHeight / 2;
+      const bounds = this.buildBounds(preferredX, preferredY, labelWidth, labelHeight);
+      if (this.isWithinViewport(bounds, viewportWidth, viewportHeight) && !this.grid.hasOverlap(bounds)) {
+        this.grid.insert(bounds);
+        directLabels.push({
+          item,
+          screenX: preferredX,
+          screenY: preferredY,
+          anchorScreenX: anchor.screenX,
+          anchorScreenY: anchor.screenY,
+          needsLeaderLine: false,
+          bounds,
+        });
+      } else {
+        hiddenCount += 1;
+      }
+    }
+
+    let hiddenIndicator: PlacedLabel | undefined;
+    if (hiddenCount > 0) {
+      hiddenIndicator = this.placeHiddenIndicator(hiddenCount, viewportWidth, viewportHeight);
+    }
+
+    return { directLabels, leaderLabels, callouts, hiddenCount, hiddenIndicator };
   }
 
   private buildBounds(
@@ -535,12 +676,12 @@ export class LabelPlacer {
       }
     }
 
+    const items = cluster.map(l => l.item);
+    const itemIds = items.map(item => item.id);
     const centroidOffsetX = centroidX - cellCenterX;
     const centroidOffsetY = centroidY - cellCenterY;
 
     const aircraftPoints = aircraftPositions.map(p => ({ screenX: p.x, screenY: p.y }));
-
-    const items = cluster.map(l => l.item);
     const displayCount = Math.min(items.length, maxCalloutLabels);
     const hiddenCount = items.length - displayCount;
 
@@ -581,6 +722,7 @@ export class LabelPlacer {
           boxHeight,
           centroidOffsetX,
           centroidOffsetY,
+          itemIds,
         });
         this.calloutLastSeen.set(clusterKey, this.frameIndex);
         return {
@@ -616,6 +758,7 @@ export class LabelPlacer {
             boxHeight,
             centroidOffsetX,
             centroidOffsetY,
+            itemIds,
           });
           this.calloutLastSeen.set(clusterKey, this.frameIndex);
           return {
@@ -655,6 +798,7 @@ export class LabelPlacer {
             boxHeight,
             centroidOffsetX,
             centroidOffsetY,
+            itemIds,
           });
           this.calloutLastSeen.set(clusterKey, this.frameIndex);
           return {
@@ -679,6 +823,7 @@ export class LabelPlacer {
             boxHeight,
             centroidOffsetX,
             centroidOffsetY,
+            itemIds,
           });
           this.calloutLastSeen.set(clusterKey, this.frameIndex);
           return {
@@ -705,6 +850,7 @@ export class LabelPlacer {
             boxHeight,
             centroidOffsetX,
             centroidOffsetY,
+            itemIds,
           });
           this.calloutLastSeen.set(clusterKey, this.frameIndex);
           return {
@@ -728,6 +874,7 @@ export class LabelPlacer {
             boxHeight,
             centroidOffsetX,
             centroidOffsetY,
+            itemIds,
           });
           this.calloutLastSeen.set(clusterKey, this.frameIndex);
           return {

@@ -65,8 +65,8 @@ export class LabelRenderer {
   ): void {
     sdfRenderer.clearText();
 
-    // Hide labels completely below zoom 5.5 or during zoom animation
-    const showLabels = zoom >= 5.5 && !isZooming;
+    // Hide labels completely below zoom 5.5
+    const showLabels = zoom >= 4;
     if (!showLabels) return;
 
     // Convert aircraft to label items
@@ -105,7 +105,15 @@ export class LabelRenderer {
     };
 
     // Place labels with overlap resolution
-    const placement = this.labelPlacer.place(labelItems, worldToScreenFn, w, h, labelOffsetPixels, gridOffset);
+    const placement = this.labelPlacer.place(
+      labelItems,
+      worldToScreenFn,
+      w,
+      h,
+      labelOffsetPixels,
+      gridOffset,
+      { lockLayout: isZooming }
+    );
 
     // Render direct labels (no leader line)
     for (const label of placement.directLabels) {
@@ -161,7 +169,7 @@ export class LabelRenderer {
       const boxCenter = screenToWorld(boxCenterX, boxCenterY, matrix, w, h);
       const centroid = screenToWorld(callout.centroidX, callout.centroidY, matrix, w, h);
 
-      draw.strokeStyle = [1, 1, 1, 0.5];
+      draw.strokeStyle = [1, 1, 1, 1.0];
       draw.lineWidth = 1;
 
       // Draw main trunk from box center to centroid
@@ -171,7 +179,7 @@ export class LabelRenderer {
       draw.stroke();
 
       // Draw branches from centroid to each aircraft
-      draw.strokeStyle = [1, 1, 1, 0.4];
+      draw.strokeStyle = [1, 1, 1, 0.1];
       for (const acPoint of callout.aircraftPoints) {
         const acWorld = screenToWorld(acPoint.screenX, acPoint.screenY, matrix, w, h);
         draw.beginPath();
