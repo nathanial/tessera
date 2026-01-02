@@ -149,7 +149,8 @@ tessera.render = function () {
     bounds,
     aircraftRenderer,
     aircraftSize,
-    selectionState.selectedIds
+    selectionState.selectedIds,
+    now / 1000
   );
 
   // ============================================
