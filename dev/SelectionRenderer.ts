@@ -7,6 +7,7 @@ import type { AircraftRenderer } from "./AircraftRenderer";
 import type { SelectionState } from "./SelectionController";
 import { getWrappedX, screenToWorld, worldToScreen } from "./CoordinateUtils";
 import { wrapWorldXNear } from "./SelectionUtils";
+import type { DashedLineRenderer, DashedRingRenderer } from "./DashedSelectionRenderers";
 
 const selectionBoxFill: [number, number, number, number] = [0.1, 0.6, 1, 0.12];
 const selectionBoxStroke: [number, number, number, number] = [0.1, 0.6, 1, 0.8];
@@ -18,80 +19,7 @@ const destinationGapLength = 8;
 const selectionDashLength = 8;
 const selectionGapLength = 6;
 const selectionDashSpeed = 30; // pixels per second
-
-function drawDashedLineScreen(
-  draw: DrawContext,
-  matrix: Float32Array,
-  w: number,
-  h: number,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  dashLength: number,
-  gapLength: number
-): void {
-  const dx = endX - startX;
-  const dy = endY - startY;
-  const distance = Math.hypot(dx, dy);
-  if (distance <= 0.01) return;
-
-  const dirX = dx / distance;
-  const dirY = dy / distance;
-  let traveled = 0;
-
-  draw.beginPath();
-  while (traveled < distance) {
-    const segmentStart = traveled;
-    const segmentEnd = Math.min(traveled + dashLength, distance);
-    const sx1 = startX + dirX * segmentStart;
-    const sy1 = startY + dirY * segmentStart;
-    const sx2 = startX + dirX * segmentEnd;
-    const sy2 = startY + dirY * segmentEnd;
-    const w1 = screenToWorld(sx1, sy1, matrix, w, h);
-    const w2 = screenToWorld(sx2, sy2, matrix, w, h);
-    draw.moveTo(w1.worldX, w1.worldY);
-    draw.lineTo(w2.worldX, w2.worldY);
-    traveled += dashLength + gapLength;
-  }
-  draw.stroke();
-}
-
-function drawDashedCircleScreen(
-  draw: DrawContext,
-  matrix: Float32Array,
-  w: number,
-  h: number,
-  centerX: number,
-  centerY: number,
-  radius: number,
-  dashLength: number,
-  gapLength: number,
-  timeSeconds: number,
-  speed: number
-): void {
-  if (radius <= 0.5) return;
-  const cycle = dashLength + gapLength;
-  const phasePx = (timeSeconds * speed) % cycle;
-  const phaseAngle = phasePx / radius;
-  const dashAngle = dashLength / radius;
-  const cycleAngle = cycle / radius;
-
-  draw.beginPath();
-  for (let angle = -phaseAngle; angle < Math.PI * 2 - phaseAngle; angle += cycleAngle) {
-    const startAngle = angle;
-    const endAngle = Math.min(angle + dashAngle, Math.PI * 2 - phaseAngle);
-    const sx1 = centerX + Math.cos(startAngle) * radius;
-    const sy1 = centerY + Math.sin(startAngle) * radius;
-    const sx2 = centerX + Math.cos(endAngle) * radius;
-    const sy2 = centerY + Math.sin(endAngle) * radius;
-    const w1 = screenToWorld(sx1, sy1, matrix, w, h);
-    const w2 = screenToWorld(sx2, sy2, matrix, w, h);
-    draw.moveTo(w1.worldX, w1.worldY);
-    draw.lineTo(w2.worldX, w2.worldY);
-  }
-  draw.stroke();
-}
+const selectionDashThickness = 1.5;
 
 export function renderSelectionBox(
   draw: DrawContext,
@@ -133,13 +61,14 @@ export function renderSelectionHighlights(
   aircraftRenderer: AircraftRenderer,
   aircraftSize: number,
   selectedIds: Set<string>,
-  timeSeconds: number
+  timeSeconds: number,
+  lineRenderer: DashedLineRenderer,
+  ringRenderer: DashedRingRenderer
 ): void {
   if (selectedIds.size === 0) return;
 
-  draw.begin(matrix, w, h);
-  draw.strokeStyle = destinationLineStroke;
-  draw.lineWidth = 1;
+  lineRenderer.begin(w, h);
+  ringRenderer.begin(w, h);
 
   for (const ac of aircraftRenderer.aircraft) {
     if (!selectedIds.has(ac.icao24)) continue;
@@ -148,21 +77,35 @@ export function renderSelectionHighlights(
     const destX = wrapWorldXNear(ac.destX, renderX);
     const startScreen = worldToScreen(renderX, ac.y, matrix, w, h);
     const endScreen = worldToScreen(destX, ac.destY, matrix, w, h);
-    drawDashedLineScreen(
-      draw,
-      matrix,
-      w,
-      h,
+    lineRenderer.addLine(
       startScreen.screenX,
       startScreen.screenY,
       endScreen.screenX,
       endScreen.screenY,
+      1,
       destinationDashLength,
-      destinationGapLength
+      destinationGapLength,
+      0,
+      destinationLineStroke
+    );
+
+    const centerScreen = startScreen;
+    const radiusWorld = aircraftSize * 2.6;
+    const edgeScreen = worldToScreen(renderX + radiusWorld, ac.y, matrix, w, h);
+    const radiusScreen = Math.abs(edgeScreen.screenX - centerScreen.screenX);
+    ringRenderer.addRing(
+      centerScreen.screenX,
+      centerScreen.screenY,
+      radiusScreen,
+      selectionDashThickness,
+      selectionDashLength,
+      selectionGapLength,
+      timeSeconds * selectionDashSpeed,
+      selectionDashStroke
     );
   }
 
-  draw.end();
+  lineRenderer.render();
 
   draw.begin(matrix, w, h);
   draw.strokeStyle = selectionRingStroke;
@@ -179,32 +122,5 @@ export function renderSelectionHighlights(
 
   draw.end();
 
-  draw.begin(matrix, w, h);
-  draw.strokeStyle = selectionDashStroke;
-  draw.lineWidth = 1.5;
-
-  for (const ac of aircraftRenderer.aircraft) {
-    if (!selectedIds.has(ac.icao24)) continue;
-    const renderX = getWrappedX(ac.x, aircraftSize, bounds.left, bounds.right);
-    if (renderX === null) continue;
-    const centerScreen = worldToScreen(renderX, ac.y, matrix, w, h);
-    const radiusWorld = aircraftSize * 2.6;
-    const edgeScreen = worldToScreen(renderX + radiusWorld, ac.y, matrix, w, h);
-    const radiusScreen = Math.abs(edgeScreen.screenX - centerScreen.screenX);
-    drawDashedCircleScreen(
-      draw,
-      matrix,
-      w,
-      h,
-      centerScreen.screenX,
-      centerScreen.screenY,
-      radiusScreen,
-      selectionDashLength,
-      selectionGapLength,
-      timeSeconds,
-      selectionDashSpeed
-    );
-  }
-
-  draw.end();
+  ringRenderer.render();
 }
