@@ -12,7 +12,7 @@ import {
   createFontAtlas,
   lonLatToTessera,
 } from "../src/index";
-import { UIContext, virtualList, textInput, type ViewBounds } from "../src/ui";
+import { UIContext, virtualList, textInput, toggleButton, type ViewBounds } from "../src/ui";
 import type { Aircraft } from "./adsb";
 import { AircraftRenderer } from "./AircraftRenderer";
 import { BorderRenderer } from "./BorderRenderer";
@@ -122,6 +122,17 @@ const uiContext = new UIContext({
       cursorColor: [0.4, 0.8, 1, 1],
       fontSize: 13 * uiScale,
       padding: 8 * uiScale,
+    },
+    toggleButton: {
+      onBackground: [0, 0.59, 0.71, 1],
+      offBackground: [0.05, 0.1, 0.16, 0.9],
+      onHover: [0, 0.69, 0.81, 1],
+      offHover: [0.08, 0.16, 0.24, 0.9],
+      onTextColor: [0, 0, 0, 1],
+      offTextColor: [0.7, 0.8, 0.9, 1],
+      borderColor: [0.15, 0.35, 0.5, 0.6],
+      fontSize: 13 * uiScale,
+      padding: 6 * uiScale,
     },
   },
 });
@@ -258,30 +269,9 @@ setupEditableAreasControls(canvas, aircraftRenderer, editableAreasState, getPane
   tessera.requestRender()
 );
 
-const paneUiLayer = document.getElementById("pane-ui-layer") as HTMLDivElement | null;
-
-type PaneToggleUI = {
-  root: HTMLDivElement;
-  labels: HTMLButtonElement;
-  groups: HTMLButtonElement;
-  sensors: HTMLButtonElement;
-  trails: HTMLButtonElement;
-  areas: HTMLButtonElement;
-};
-
-const paneToggleUIs = new Map<string, PaneToggleUI>();
-const PANE_UI_PADDING = 10;
-
-const updatePaneToggleLabels = (paneId: string) => {
-  const pane = paneStates.get(paneId);
-  const ui = paneToggleUIs.get(paneId);
-  if (!pane || !ui) return;
-  ui.labels.textContent = `Labels: ${pane.showLabels ? "On" : "Off"}`;
-  ui.groups.textContent = `Groups: ${pane.showGroups ? "On" : "Off"}`;
-  ui.sensors.textContent = `Sensors: ${pane.showSensors ? "On" : "Off"}`;
-  ui.trails.textContent = `Trails: ${pane.showTrails ? "On" : "Off"}`;
-  ui.areas.textContent = `Areas: ${pane.showAreas ? "On" : "Off"}`;
-};
+// Current simulation speed multiplier
+let currentSpeed = 1;
+aircraftRenderer.setSpeedMultiplier(currentSpeed);
 
 const setActivePane = (paneId: string) => {
   if (!paneStates.has(paneId)) return;
@@ -297,146 +287,6 @@ const setActivePane = (paneId: string) => {
   }
 };
 
-const setPaneAreasVisible = (paneId: string, visible: boolean) => {
-  const pane = paneStates.get(paneId);
-  if (!pane) return;
-  pane.showAreas = visible;
-  if (paneId === activePaneId) {
-    editableAreasState.enabled = visible;
-    if (!visible) {
-      editableAreasState.selectedId = null;
-      editableAreasState.activeHandle = null;
-      editableAreasState.dragState = null;
-    }
-  }
-  updatePaneToggleLabels(paneId);
-  tessera.requestRender();
-};
-
-const createPaneToggleUI = (paneId: string) => {
-  if (!paneUiLayer) return;
-  const root = document.createElement("div");
-  root.className = "pane-toggle-group";
-
-  const createButton = (label: string, className: string) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `pane-toggle ${className}`;
-    button.textContent = label;
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-    });
-    return button;
-  };
-
-  const labelsButton = createButton("Labels: On", "toggle-labels");
-  const groupsButton = createButton("Groups: On", "toggle-groups");
-  const sensorsButton = createButton("Sensors: On", "toggle-sensors");
-  const trailsButton = createButton("Trails: On", "toggle-trails");
-  const areasButton = createButton("Areas: On", "toggle-areas");
-
-  labelsButton.addEventListener("click", () => {
-    const pane = paneStates.get(paneId);
-    if (!pane) return;
-    pane.showLabels = !pane.showLabels;
-    updatePaneToggleLabels(paneId);
-    tessera.requestRender();
-  });
-
-  groupsButton.addEventListener("click", () => {
-    const pane = paneStates.get(paneId);
-    if (!pane) return;
-    pane.showGroups = !pane.showGroups;
-    updatePaneToggleLabels(paneId);
-    tessera.requestRender();
-  });
-
-  sensorsButton.addEventListener("click", () => {
-    const pane = paneStates.get(paneId);
-    if (!pane) return;
-    pane.showSensors = !pane.showSensors;
-    updatePaneToggleLabels(paneId);
-    tessera.requestRender();
-  });
-
-  trailsButton.addEventListener("click", () => {
-    const pane = paneStates.get(paneId);
-    if (!pane) return;
-    pane.showTrails = !pane.showTrails;
-    updatePaneToggleLabels(paneId);
-    tessera.requestRender();
-  });
-
-  areasButton.addEventListener("click", () => {
-    const pane = paneStates.get(paneId);
-    if (!pane) return;
-    setPaneAreasVisible(paneId, !pane.showAreas);
-  });
-
-  root.append(labelsButton, groupsButton, sensorsButton, trailsButton, areasButton);
-  paneUiLayer.appendChild(root);
-
-  const ui = {
-    root,
-    labels: labelsButton,
-    groups: groupsButton,
-    sensors: sensorsButton,
-    trails: trailsButton,
-    areas: areasButton,
-  };
-  paneToggleUIs.set(paneId, ui);
-  updatePaneToggleLabels(paneId);
-};
-
-const syncPaneToggleUI = () => {
-  if (!paneUiLayer) return;
-  const dpr = window.devicePixelRatio || 1;
-  const paneIds = new Set(layoutCache.rects.keys());
-  for (const [id, ui] of paneToggleUIs) {
-    if (!paneIds.has(id)) {
-      ui.root.remove();
-      paneToggleUIs.delete(id);
-    }
-  }
-  for (const id of paneIds) {
-    if (!paneToggleUIs.has(id)) {
-      createPaneToggleUI(id);
-    }
-  }
-  for (const [id, rect] of layoutCache.rects) {
-    const ui = paneToggleUIs.get(id);
-    if (!ui) continue;
-    ui.root.style.left = `${rect.x / dpr + PANE_UI_PADDING}px`;
-    ui.root.style.top = `${rect.y / dpr + PANE_UI_PADDING}px`;
-    ui.root.style.transform = "";
-  }
-};
-
-const speedButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".speed-button"));
-if (speedButtons.length > 0) {
-  const setActiveSpeed = (value: number) => {
-    aircraftRenderer.setSpeedMultiplier(value);
-    for (const button of speedButtons) {
-      const buttonValue = Number(button.dataset.speed);
-      button.classList.toggle("active", buttonValue === value);
-    }
-  };
-
-  for (const button of speedButtons) {
-    button.addEventListener("click", () => {
-      const value = Number(button.dataset.speed);
-      if (!Number.isFinite(value)) return;
-      setActiveSpeed(value);
-    });
-  }
-
-  const initialSpeedButton = speedButtons.find((button) => button.classList.contains("active"));
-  const initialSpeed = initialSpeedButton ? Number(initialSpeedButton.dataset.speed) : 1;
-  if (Number.isFinite(initialSpeed)) {
-    setActiveSpeed(initialSpeed);
-  }
-}
 
 const splitPane = (targetId: string, orientation: Orientation) => {
   if (countPanes(layout) >= MAX_PANES) {
@@ -502,7 +352,6 @@ const syncPaneState = () => {
     const nextId = paneIds.values().next().value ?? ROOT_PANE_ID;
     setActivePane(nextId);
   }
-  syncPaneToggleUI();
 };
 
 const contextMenu = document.getElementById("context-menu") as HTMLDivElement | null;
@@ -1304,7 +1153,6 @@ tessera.render = function () {
   aircraftRenderer.update();
 
   updateLayoutCache();
-  syncPaneToggleUI();
 
   const viewportRects = computeViewportRects();
 
@@ -1757,6 +1605,95 @@ tessera.render = function () {
         uiContext.lineTo(vehicleCanvasX, screenY);    // Horizontal to vehicle X
         uiContext.lineTo(vehicleCanvasX, vehicleCanvasY); // Vertical to vehicle
         uiContext.strokePath([0.3, 0.7, 0.9, 0.8], 2);
+      }
+    }
+
+    // Speed controls below vehicle list
+    const speedValues = [0.1, 1, 5, 10, 20];
+    const speedButtonWidth = 44 * uiScale;
+    const speedButtonHeight = 24 * uiScale;
+    const speedY = listY + listHeight + 10 * uiScale;
+    let speedX = listX;
+
+    for (const speed of speedValues) {
+      const isActive = currentSpeed === speed;
+      const result = toggleButton(uiContext, {
+        id: `speed-${speed}`,
+        x: speedX,
+        y: speedY,
+        width: speedButtonWidth,
+        height: speedButtonHeight,
+        label: `${speed}x`,
+        isOn: isActive,
+      });
+
+      if (result.toggled) {
+        currentSpeed = speed;
+        aircraftRenderer.setSpeedMultiplier(speed);
+      }
+
+      speedX += speedButtonWidth + 4 * uiScale;
+    }
+
+    // Help text below speed controls
+    const helpY = speedY + speedButtonHeight + 12 * uiScale;
+    uiContext.label("Shift + drag to select aircraft", listX, helpY, {
+      color: [0.5, 0.65, 0.75, 0.8],
+      fontSize: 11 * uiScale,
+      align: "left",
+    });
+    uiContext.label("Right click for Go Here when selected", listX, helpY + 14 * uiScale, {
+      color: [0.5, 0.65, 0.75, 0.8],
+      fontSize: 11 * uiScale,
+      align: "left",
+    });
+
+    // Pane toggle buttons (rendered in each pane's top-left corner)
+    const toggleDefs = [
+      { key: "labels", label: "Labels", prop: "showLabels" as const },
+      { key: "groups", label: "Groups", prop: "showGroups" as const },
+      { key: "sensors", label: "Sensors", prop: "showSensors" as const },
+      { key: "trails", label: "Trails", prop: "showTrails" as const },
+      { key: "areas", label: "Areas", prop: "showAreas" as const },
+    ];
+    const toggleBtnWidth = 70 * uiScale;
+    const toggleBtnHeight = 22 * uiScale;
+    const togglePadding = 10 * uiScale;
+
+    for (const [paneId, paneRect] of layoutCache.rects) {
+      const pane = paneStates.get(paneId);
+      if (!pane) continue;
+
+      let toggleX = paneRect.x + togglePadding;
+      const toggleY = paneRect.y + togglePadding;
+
+      for (const toggle of toggleDefs) {
+        const isOn = pane[toggle.prop];
+        const result = toggleButton(uiContext, {
+          id: `${paneId}-toggle-${toggle.key}`,
+          x: toggleX,
+          y: toggleY,
+          width: toggleBtnWidth,
+          height: toggleBtnHeight,
+          label: `${toggle.label}: ${isOn ? "On" : "Off"}`,
+          isOn,
+        });
+
+        if (result.toggled) {
+          pane[toggle.prop] = !isOn;
+          // Special handling for areas toggle
+          if (toggle.key === "areas" && paneId === activePaneId) {
+            editableAreasState.enabled = !isOn;
+            if (isOn) {
+              editableAreasState.selectedId = null;
+              editableAreasState.activeHandle = null;
+              editableAreasState.dragState = null;
+            }
+          }
+          tessera.requestRender();
+        }
+
+        toggleX += toggleBtnWidth + 6 * uiScale;
       }
     }
 

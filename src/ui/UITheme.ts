@@ -72,6 +72,18 @@ export interface TextInputTheme {
   padding: number;
 }
 
+export interface ToggleButtonTheme {
+  onBackground: Color;
+  offBackground: Color;
+  onHover: Color;
+  offHover: Color;
+  onTextColor: Color;
+  offTextColor: Color;
+  borderColor: Color;
+  fontSize: number;
+  padding: number;
+}
+
 export interface UITheme {
   button: ButtonTheme;
   panel: PanelTheme;
@@ -79,6 +91,7 @@ export interface UITheme {
   label: LabelTheme;
   list: ListTheme;
   textInput: TextInputTheme;
+  toggleButton: ToggleButtonTheme;
 }
 
 /** Default dark theme with transparency */
@@ -141,6 +154,17 @@ export const DEFAULT_THEME: UITheme = {
     fontSize: 14,
     padding: 8,
   },
+  toggleButton: {
+    onBackground: [0, 0.59, 0.71, 1],
+    offBackground: [0.08, 0.12, 0.18, 0.9],
+    onHover: [0, 0.69, 0.81, 1],
+    offHover: [0.12, 0.18, 0.26, 0.9],
+    onTextColor: [0, 0, 0, 1],
+    offTextColor: [0.7, 0.8, 0.9, 1],
+    borderColor: [0.2, 0.4, 0.6, 0.6],
+    fontSize: 12,
+    padding: 6,
+  },
 };
 
 /** Deep merge a partial theme with the default theme */
@@ -152,5 +176,6 @@ export function mergeTheme(partial: Partial<UITheme>): UITheme {
     label: { ...DEFAULT_THEME.label, ...partial.label },
     list: { ...DEFAULT_THEME.list, ...partial.list },
     textInput: { ...DEFAULT_THEME.textInput, ...partial.textInput },
+    toggleButton: { ...DEFAULT_THEME.toggleButton, ...partial.toggleButton },
   };
 }

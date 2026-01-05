@@ -19,6 +19,7 @@ export {
   type LabelTheme,
   type ListTheme,
   type TextInputTheme,
+  type ToggleButtonTheme,
   DEFAULT_THEME,
   mergeTheme,
 } from "./UITheme";
@@ -35,4 +36,10 @@ export {
   textInput,
   type TextInputConfig,
   type TextInputResult,
+  button,
+  type ButtonConfig,
+  type ButtonResult,
+  toggleButton,
+  type ToggleButtonConfig,
+  type ToggleButtonResult,
 } from "./widgets";
