@@ -87,8 +87,9 @@ export function button(ui: UIContext, config: ButtonConfig): ButtonResult {
   }
 
   // Render centered label
+  // Offset by 0.1 * fontSize to account for visual weight being above geometric center
   const textX = x + width / 2;
-  const textY = y + height / 2 + theme.fontSize * 0.35; // Approximate vertical center
+  const textY = y + height / 2 + theme.fontSize * 0.1;
   ui.label(label, textX, textY, {
     color: theme.textColor,
     fontSize: theme.fontSize,

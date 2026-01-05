@@ -160,8 +160,9 @@ export function textInput(ui: UIContext, config: TextInputConfig): TextInputResu
   ui.strokeRect(x, y, width, height, borderColor, 1);
 
   // Calculate text position
+  // Offset by 0.1 * fontSize to account for visual weight being above geometric center
   const textX = x + theme.padding;
-  const textY = y + height / 2 + theme.fontSize * 0.35; // Approximate vertical center
+  const textY = y + height / 2 + theme.fontSize * 0.1;
 
   // Set up clipping for text overflow
   ui.pushClipRect(x + 2, y + 2, width - 4, height - 4);
