@@ -293,9 +293,6 @@ const getPaneContext: PaneContextProvider = (screenX, screenY, paneId) => {
   const rootRect = { x: sidebarW, y: 0, width: canvas.width - sidebarW, height: canvas.height };
   const targetId = paneId ?? findPaneAt(layout, rootRect, screenX, screenY);
   if (!targetId) return null;
-  if (!paneId) {
-    setActivePane(targetId);
-  }
   const rect = layoutCache.rects.get(targetId);
   if (!rect) return null;
   const pane = paneStates.get(targetId);
@@ -1305,7 +1302,6 @@ window.addEventListener("mousemove", (event) => {
     }
     const context = getPaneContext(screenX, screenY);
     if (context) {
-      setActivePane(context.paneId);
       const worldPoint = screenToWorld(
         context.localX,
         context.localY,
@@ -1561,7 +1557,6 @@ canvas.addEventListener(
 
     const context = getPaneContext(screenX, screenY);
     if (!context) return;
-    setActivePane(context.paneId);
     const pane = paneStates.get(context.paneId);
     if (!pane) return;
     const delta = -event.deltaY * 0.002;
@@ -1978,12 +1973,18 @@ tessera.render = function () {
         for (let i = 0; i < tabCount; i++) {
           const paneId = tabGroupNode.paneIds[i]!;
           const isActive = i === tabGroupNode.activeIndex;
+          const isGloballyActive = paneId === activePaneId;
           const tabX = rect.x + i * tabWidth;
 
-          // Tab background
-          const bgColor: [number, number, number, number] = isActive
-            ? [0.12, 0.18, 0.25, 1]
-            : [0.05, 0.08, 0.12, 1];
+          // Tab background - three states:
+          // 1. Globally active (brightest - teal)
+          // 2. Active within group but not global (medium - blue)
+          // 3. Inactive (dimmest - gray)
+          const bgColor: [number, number, number, number] = isGloballyActive
+            ? [0.15, 0.35, 0.45, 1]
+            : isActive
+              ? [0.12, 0.18, 0.25, 1]
+              : [0.05, 0.08, 0.12, 1];
           draw.fillStyle = bgColor;
           draw.fillRect(tabX, rect.y, tabWidth, headerHeight);
 
@@ -1997,6 +1998,12 @@ tessera.render = function () {
           if (!isActive) {
             draw.fillStyle = [0.2, 0.4, 0.6, 0.6];
             draw.fillRect(tabX, rect.y + headerHeight - 1, tabWidth, 1);
+          }
+
+          // Cyan bottom accent for globally active tab
+          if (isGloballyActive) {
+            draw.fillStyle = [0.2, 0.9, 0.8, 1];
+            draw.fillRect(tabX, rect.y + headerHeight - 3, tabWidth, 3);
           }
 
           // Close button (X) - show only on hover
@@ -2024,9 +2031,21 @@ tessera.render = function () {
       } else {
         // Single pane - one tab (with close button on hover if multiple panes exist)
         const singlePaneId = paneTab.paneId;
+        const isGloballyActive = singlePaneId === activePaneId;
         const tabWidth = Math.min(TAB_MAX_WIDTH * uiScale, rect.width);
-        draw.fillStyle = [0.12, 0.18, 0.25, 1];
+
+        // Background color - teal if globally active, otherwise default blue
+        const bgColor: [number, number, number, number] = isGloballyActive
+          ? [0.15, 0.35, 0.45, 1]
+          : [0.12, 0.18, 0.25, 1];
+        draw.fillStyle = bgColor;
         draw.fillRect(rect.x, rect.y, tabWidth, headerHeight);
+
+        // Cyan bottom accent for globally active pane
+        if (isGloballyActive) {
+          draw.fillStyle = [0.2, 0.9, 0.8, 1];
+          draw.fillRect(rect.x, rect.y + headerHeight - 3, tabWidth, 3);
+        }
 
         // Show close button on hover (if pane can be closed)
         const canClose = countPanes(layout) > 1;
@@ -2075,15 +2094,18 @@ tessera.render = function () {
           const paneId = tabGroupNode.paneIds[i]!;
           const pane = paneStates.get(paneId);
           const isActive = i === tabGroupNode.activeIndex;
+          const isGloballyActive = paneId === activePaneId;
           const tabX = rect.x + i * tabWidth;
           const isEditing = tabEditState.active && tabEditState.paneId === paneId;
 
           const name = isEditing ? tabEditState.text : (pane?.name ?? paneId);
           const textColor: [number, number, number, number] = isEditing
             ? [1, 1, 0.5, 1]  // Yellow when editing
-            : isActive
-              ? [1, 1, 1, 1]
-              : [0.5, 0.6, 0.7, 1];
+            : isGloballyActive
+              ? [0.4, 1, 0.9, 1]  // Bright cyan for globally active
+              : isActive
+                ? [1, 1, 1, 1]  // White for active-in-group
+                : [0.5, 0.6, 0.7, 1];  // Muted for inactive
 
           // Add cursor when editing
           const displayText = isEditing ? name + "|" : name;
@@ -2100,11 +2122,14 @@ tessera.render = function () {
       } else {
         // Single pane tab
         const pane = paneStates.get(singlePaneId);
+        const isGloballyActive = singlePaneId === activePaneId;
         const isEditing = tabEditState.active && tabEditState.paneId === singlePaneId;
         const name = isEditing ? tabEditState.text : (pane?.name ?? singlePaneId);
         const textColor: [number, number, number, number] = isEditing
-          ? [1, 1, 0.5, 1]
-          : [1, 1, 1, 1];
+          ? [1, 1, 0.5, 1]  // Yellow when editing
+          : isGloballyActive
+            ? [0.4, 1, 0.9, 1]  // Bright cyan for globally active
+            : [1, 1, 1, 1];  // White otherwise
         const displayText = isEditing ? name + "|" : name;
         const textPadding = 10 * uiScale;
 
