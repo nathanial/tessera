@@ -670,6 +670,7 @@ fontAtlas.ready.then(() => {
   // Create TextLayout for accurate text measurement
   const textLayout = new TextLayout(fontAtlas.metadata);
   measureFn = (text, fontSize) => textLayout.measureLine(text, fontSize);
+  uiContext.setTextLayout(textLayout);
   for (const renderer of labelRenderers.values()) {
     renderer.setMeasureFunction(measureFn);
   }

@@ -69,11 +69,19 @@ export function textInput(ui: UIContext, config: TextInputConfig): TextInputResu
       state.setActive(id);
       isFocused = true;
 
-      // Place cursor at click position (approximate)
+      // Place cursor at click position using accurate text measurement
       const relX = mouse.x - (x + theme.padding);
-      const charWidth = theme.fontSize * 0.6;
-      const clickIndex = Math.round(relX / charWidth);
-      inputState.cursorIndex = Math.max(0, Math.min(inputState.text.length, clickIndex));
+      let clickIndex = inputState.text.length;
+      for (let i = 0; i <= inputState.text.length; i++) {
+        const width = ui.measureText(inputState.text.slice(0, i), theme.fontSize);
+        if (width > relX) {
+          // Check if closer to this char or previous
+          const prevWidth = i > 0 ? ui.measureText(inputState.text.slice(0, i - 1), theme.fontSize) : 0;
+          clickIndex = (relX - prevWidth) < (width - relX) ? Math.max(0, i - 1) : i;
+          break;
+        }
+      }
+      inputState.cursorIndex = clickIndex;
       inputState.blinkTime = 0; // Reset blink on click
 
       input.consumeInput();
@@ -184,8 +192,8 @@ export function textInput(ui: UIContext, config: TextInputConfig): TextInputResu
 
   // Render cursor
   if (cursorVisible) {
-    const charWidth = theme.fontSize * 0.6;
-    const cursorX = textX + inputState.cursorIndex * charWidth;
+    const textBeforeCursor = inputState.text.slice(0, inputState.cursorIndex);
+    const cursorX = textX + ui.measureText(textBeforeCursor, theme.fontSize);
     const cursorTop = y + theme.padding;
     const cursorBottom = y + height - theme.padding;
 

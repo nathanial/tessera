@@ -7,6 +7,7 @@
 
 import { DrawContext } from "../immediate/DrawContext";
 import { SDFRenderer } from "../sdf/SDFRenderer";
+import { TextLayout } from "../sdf/TextLayout";
 import { projection, type Mat3 } from "../math/mat3";
 import { WidgetState } from "./WidgetState";
 import { InputLayer } from "./InputLayer";
@@ -88,6 +89,9 @@ export class UIContext {
 
   // Hover tracking
   private uiHovered: boolean = false;
+
+  // Text measurement
+  private textLayout: TextLayout | null = null;
 
   constructor(options: UIContextOptions) {
     this.gl = options.gl;
@@ -296,6 +300,23 @@ export class UIContext {
       width: this.frame?.viewportWidth ?? 0,
       height: this.frame?.viewportHeight ?? 0,
     };
+  }
+
+  /** Set the text layout for accurate text measurement */
+  setTextLayout(layout: TextLayout): void {
+    this.textLayout = layout;
+  }
+
+  /**
+   * Measure the width of text at a given font size.
+   * Falls back to approximate measurement if TextLayout not available.
+   */
+  measureText(text: string, fontSize: number): number {
+    if (!this.textLayout) {
+      // Fallback to approximate width
+      return text.length * fontSize * 0.6;
+    }
+    return this.textLayout.measureLine(text, fontSize);
   }
 
   // ==================== Clipping ====================
