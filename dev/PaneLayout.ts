@@ -150,7 +150,8 @@ export function splitLayout(
   }
 
   if (node.kind === "tabgroup") {
-    if (node.id !== targetId) return { node, didSplit: false };
+    // Check if target is this tab group (by ID) or a pane within it
+    if (node.id !== targetId && !node.paneIds.includes(targetId)) return { node, didSplit: false };
     // Split entire tab group
     const split: SplitNode = {
       kind: "split",

@@ -83,6 +83,27 @@ describe("PaneLayout", () => {
       expect(didSplit).toBe(false);
       expect(node).toBe(layout);
     });
+
+    it("splits a pane that is inside a tab group", () => {
+      // BUG FIX: splitLayout was checking tabgroup.id instead of paneIds.includes()
+      // Create tab group [pane-1, pane-2]
+      let layout = createLayout("pane-1");
+      const { node: tabGroup } = convertToTabGroup(layout, "pane-1", "pane-2");
+      layout = tabGroup;
+
+      expect(layout.kind).toBe("tabgroup");
+
+      // Try to split pane-2 (which is in the tab group)
+      const { node, didSplit } = splitLayout(layout, "pane-2", "vertical", "pane-3");
+
+      expect(didSplit).toBe(true);
+      expect(node.kind).toBe("split");
+      if (node.kind === "split") {
+        // Tab group should be on left (a), new pane on right (b)
+        expect(node.a.kind).toBe("tabgroup");
+        expect(node.b).toEqual({ kind: "leaf", id: "pane-3" });
+      }
+    });
   });
 
   describe("splitLayoutWithPosition", () => {
