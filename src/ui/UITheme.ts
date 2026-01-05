@@ -166,6 +166,8 @@ export const DEFAULT_THEME: UITheme = {
     borderColor: [0.2, 0.4, 0.6, 0.6],
     fontSize: 12,
     padding: 6,
+    haloColor: [0, 0, 0, 0.6],
+    haloWidth: 1.5,
   },
 };
 

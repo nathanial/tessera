@@ -27,15 +27,18 @@ precision highp float;
 in vec2 a_anchor;
 in vec2 a_offset;
 in vec2 a_texCoord;
+in vec4 a_color;
 
 uniform mat3 u_matrix;
 uniform float u_viewportWidth;
 uniform float u_viewportHeight;
 
 out vec2 v_texCoord;
+out vec4 v_color;
 
 void main() {
   v_texCoord = a_texCoord;
+  v_color = a_color;
 
   // Transform anchor to clip space (homogeneous coordinates)
   vec3 anchorClip = u_matrix * vec3(a_anchor, 1.0);
@@ -75,12 +78,12 @@ export const sdfFragmentShader = `#version 300 es
 precision mediump float;
 
 uniform sampler2D u_atlasTexture;
-uniform vec4 u_color;
 uniform float u_opacity;
 uniform vec4 u_sdfParams;    // [buffer, gamma, haloBuffer, haloGamma]
 uniform vec4 u_haloColor;
 
 in vec2 v_texCoord;
+in vec4 v_color;
 
 out vec4 fragColor;
 
@@ -118,9 +121,9 @@ void main() {
     }
   }
 
-  // Composite: halo behind, fill in front
-  vec3 color = u_color.rgb * alpha + u_haloColor.rgb * haloAlpha;
-  float finalAlpha = (u_color.a * alpha + u_haloColor.a * haloAlpha) * u_opacity;
+  // Composite: halo behind, fill in front (using per-vertex color)
+  vec3 color = v_color.rgb * alpha + u_haloColor.rgb * haloAlpha;
+  float finalAlpha = (v_color.a * alpha + u_haloColor.a * haloAlpha) * u_opacity;
 
   fragColor = vec4(color, finalAlpha);
 

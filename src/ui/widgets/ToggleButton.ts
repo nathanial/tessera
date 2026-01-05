@@ -89,7 +89,7 @@ export function toggleButton(ui: UIContext, config: ToggleButtonConfig): ToggleB
   // Render border
   ui.strokeRect(x, y, width, height, theme.borderColor, 1);
 
-  // Render centered label
+  // Render centered label with halo for readability
   const textColor = isOn ? theme.onTextColor : theme.offTextColor;
   const textX = x + width / 2;
   const textY = y + height / 2 + theme.fontSize * 0.35; // Approximate vertical center
@@ -97,6 +97,8 @@ export function toggleButton(ui: UIContext, config: ToggleButtonConfig): ToggleB
     color: textColor,
     fontSize: theme.fontSize,
     align: "center",
+    haloColor: theme.haloColor,
+    haloWidth: theme.haloWidth,
   });
 
   return {

@@ -29,7 +29,6 @@ export class SDFRenderer {
     viewportWidth: WebGLUniformLocation;
     viewportHeight: WebGLUniformLocation;
     atlasTexture: WebGLUniformLocation;
-    color: WebGLUniformLocation;
     opacity: WebGLUniformLocation;
     sdfParams: WebGLUniformLocation;
     haloColor: WebGLUniformLocation;
@@ -57,7 +56,6 @@ export class SDFRenderer {
       viewportWidth: gl.getUniformLocation(this.program, "u_viewportWidth")!,
       viewportHeight: gl.getUniformLocation(this.program, "u_viewportHeight")!,
       atlasTexture: gl.getUniformLocation(this.program, "u_atlasTexture")!,
-      color: gl.getUniformLocation(this.program, "u_color")!,
       opacity: gl.getUniformLocation(this.program, "u_opacity")!,
       sdfParams: gl.getUniformLocation(this.program, "u_sdfParams")!,
       haloColor: gl.getUniformLocation(this.program, "u_haloColor")!,
@@ -186,7 +184,7 @@ export class SDFRenderer {
 
     const style = this.textBuilder.getFirstStyle();
     if (style) {
-      gl.uniform4fv(this.uniforms.color, style.color);
+      // Color is now per-vertex, only set opacity and SDF params as uniforms
       gl.uniform1f(this.uniforms.opacity, style.opacity);
 
       const haloBuffer =
@@ -209,7 +207,7 @@ export class SDFRenderer {
 
     const style = this.iconBuilder.getFirstStyle();
     if (style) {
-      gl.uniform4fv(this.uniforms.color, style.color);
+      // Color is now per-vertex, only set opacity as uniform
       gl.uniform1f(this.uniforms.opacity, style.opacity);
     }
 

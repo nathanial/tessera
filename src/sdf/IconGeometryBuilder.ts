@@ -69,7 +69,7 @@ export class IconGeometryBuilder {
   /**
    * Build geometry from icons.
    *
-   * Vertex format: anchor (2) + offset (2) + texCoord (2) = 6 floats = 24 bytes
+   * Vertex format: anchor (2) + offset (2) + texCoord (2) + color (4) = 10 floats = 40 bytes
    */
   build(metadata: IconAtlasMetadata): void {
     if (this.icons.length === 0) {
@@ -116,10 +116,13 @@ export class IconGeometryBuilder {
         [halfW, halfH, u1, v1],
       ];
 
+      // Get color components
+      const [r, g, b, a] = icon.style.color;
+
       for (const [lx, ly, u, v] of cornerData) {
         const rx = cos * lx - sin * ly + centerOffsetX;
         const ry = sin * lx + cos * ly + centerOffsetY;
-        vertices.push(anchorX, anchorY, rx, ry, u, v);
+        vertices.push(anchorX, anchorY, rx, ry, u, v, r, g, b, a);
       }
 
       const base = vertexCount;
@@ -137,9 +140,10 @@ export class IconGeometryBuilder {
             ? new Uint32Array(indices)
             : new Uint16Array(indices),
         attributes: [
-          { location: 0, size: 2, stride: 24, offset: 0 },
-          { location: 1, size: 2, stride: 24, offset: 8 },
-          { location: 2, size: 2, stride: 24, offset: 16 },
+          { location: 0, size: 2, stride: 40, offset: 0 },  // anchor
+          { location: 1, size: 2, stride: 40, offset: 8 },  // offset
+          { location: 2, size: 2, stride: 40, offset: 16 }, // texCoord
+          { location: 3, size: 4, stride: 40, offset: 24 }, // color
         ],
       });
     }

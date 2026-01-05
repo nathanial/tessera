@@ -124,15 +124,20 @@ const uiContext = new UIContext({
       padding: 8 * uiScale,
     },
     toggleButton: {
-      onBackground: [0, 0.59, 0.71, 1],
-      offBackground: [0.05, 0.1, 0.16, 0.9],
-      onHover: [0, 0.69, 0.81, 1],
-      offHover: [0.08, 0.16, 0.24, 0.9],
-      onTextColor: [0, 0, 0, 1],
-      offTextColor: [0.7, 0.8, 0.9, 1],
-      borderColor: [0.15, 0.35, 0.5, 0.6],
+      // Darker, more opaque backgrounds for better contrast
+      onBackground: [0, 0.5, 0.6, 1],
+      offBackground: [0.02, 0.05, 0.1, 1],
+      onHover: [0, 0.6, 0.72, 1],
+      offHover: [0.05, 0.1, 0.18, 1],
+      // Bright white text for maximum readability
+      onTextColor: [1, 1, 1, 1],
+      offTextColor: [1, 1, 1, 1],
+      borderColor: [0.2, 0.4, 0.55, 0.8],
       fontSize: 13 * uiScale,
       padding: 6 * uiScale,
+      // Text outline disabled - was making text appear off-white
+      haloColor: [0, 0, 0, 0],
+      haloWidth: 0,
     },
   },
 });
