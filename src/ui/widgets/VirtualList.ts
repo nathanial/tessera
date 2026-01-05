@@ -26,6 +26,8 @@ export interface VirtualListConfig<T> {
   items: T[];
   itemHeight?: number;
   selectedIndex?: number;
+  /** External highlight index (e.g., from map hover) - shows hover background */
+  highlightedIndex?: number;
   renderItem: (item: T, index: number, rect: ItemRect, ui: UIContext) => void;
   onSelect?: (index: number, item: T) => void;
 }
@@ -59,7 +61,7 @@ export function virtualList<T>(
   ui: UIContext,
   config: VirtualListConfig<T>
 ): VirtualListResult<T> {
-  const { id, x, y, width, height, items, selectedIndex, renderItem, onSelect } = config;
+  const { id, x, y, width, height, items, selectedIndex, highlightedIndex, renderItem, onSelect } = config;
   const theme = ui.getTheme();
   const listTheme = theme.list;
   const scrollbarWidth = theme.scrollbar.width;
@@ -159,10 +161,11 @@ export function virtualList<T>(
     }
 
     // Draw row background
+    const isHighlighted = i === highlightedIndex;
     let bgColor = i % 2 === 0 ? listTheme.itemBackground : listTheme.itemAltBackground;
     if (isSelected) {
       bgColor = listTheme.itemSelectedBackground;
-    } else if (isHovered) {
+    } else if (isHovered || isHighlighted) {
       bgColor = listTheme.itemHoverBackground;
     }
 

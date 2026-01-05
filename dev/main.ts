@@ -1563,6 +1563,9 @@ tessera.render = function () {
 
     // Render the virtualized list
     const selectedIndex = vehicles.findIndex((v) => v.id === selectedVehicleId);
+    const highlightedIndex = hoveredVehicleId
+      ? vehicles.findIndex((v) => v.id === hoveredVehicleId)
+      : -1;
     const listResult = virtualList(uiContext, {
       id: "vehicle-list",
       x: listX,
@@ -1572,6 +1575,7 @@ tessera.render = function () {
       items: vehicles,
       itemHeight: 28 * uiScale,
       selectedIndex: selectedIndex >= 0 ? selectedIndex : undefined,
+      highlightedIndex: highlightedIndex >= 0 ? highlightedIndex : undefined,
       renderItem: (vehicle, _index, itemRect, ui) => {
         const textY = itemRect.y + itemRect.height / 2 + 4 * uiScale;
         const padding = theme.list.itemPadding;
@@ -1625,38 +1629,45 @@ tessera.render = function () {
       }
     }
 
-    // Draw connector line from hovered list item to its vehicle
-    if (listResult.hoveredIndex !== null) {
-      const hoveredItem = listResult.visibleItems.find(v => v.index === listResult.hoveredIndex);
-      if (hoveredItem) {
-        const { item, screenY } = hoveredItem;
-        const aircraft = item.aircraft;
+    // Draw connector line from hovered item to its vehicle
+    // Works for both list hover and map hover (if vehicle is visible in list)
+    let connectorItem = listResult.hoveredIndex !== null
+      ? listResult.visibleItems.find(v => v.index === listResult.hoveredIndex)
+      : null;
 
-        // Get wrapped X position for this viewport
-        const wrappedX = getWrappedX(aircraft.x, 0, activeBounds.left, activeBounds.right);
-        if (wrappedX !== null) {
-          // Transform to screen coordinates (relative to pane)
-          const paneMatrix = activePane.camera.getMatrix(activeRect.width, activeRect.height);
-          const vehicleScreen = worldToScreen(
-            wrappedX,
-            aircraft.y,
-            paneMatrix,
-            activeRect.width,
-            activeRect.height
-          );
+    // If not hovering on list but hovering on map, find vehicle in visible list items
+    if (!connectorItem && hoveredVehicleId !== null) {
+      connectorItem = listResult.visibleItems.find(v => v.item.id === hoveredVehicleId);
+    }
 
-          // Offset by pane position to get canvas coordinates
-          const vehicleCanvasX = vehicleScreen.screenX + activeRect.x;
-          const vehicleCanvasY = vehicleScreen.screenY + activeRect.y;
+    if (connectorItem) {
+      const { item, screenY } = connectorItem;
+      const aircraft = item.aircraft;
 
-          // Draw L-shaped line: horizontal to vehicle X, then vertical to vehicle
-          const startX = listX + listWidth; // Right edge of list
-          uiContext.beginPath();
-          uiContext.moveTo(startX, screenY);
-          uiContext.lineTo(vehicleCanvasX, screenY);    // Horizontal to vehicle X
-          uiContext.lineTo(vehicleCanvasX, vehicleCanvasY); // Vertical to vehicle
-          uiContext.strokePath([0.8, 0.8, 0.2, 0.8], 2);
-        }
+      // Get wrapped X position for this viewport
+      const wrappedX = getWrappedX(aircraft.x, 0, activeBounds.left, activeBounds.right);
+      if (wrappedX !== null) {
+        // Transform to screen coordinates (relative to pane)
+        const paneMatrix = activePane.camera.getMatrix(activeRect.width, activeRect.height);
+        const vehicleScreen = worldToScreen(
+          wrappedX,
+          aircraft.y,
+          paneMatrix,
+          activeRect.width,
+          activeRect.height
+        );
+
+        // Offset by pane position to get canvas coordinates
+        const vehicleCanvasX = vehicleScreen.screenX + activeRect.x;
+        const vehicleCanvasY = vehicleScreen.screenY + activeRect.y;
+
+        // Draw L-shaped line: horizontal to vehicle X, then vertical to vehicle
+        const startX = listX + listWidth; // Right edge of list
+        uiContext.beginPath();
+        uiContext.moveTo(startX, screenY);
+        uiContext.lineTo(vehicleCanvasX, screenY);    // Horizontal to vehicle X
+        uiContext.lineTo(vehicleCanvasX, vehicleCanvasY); // Vertical to vehicle
+        uiContext.strokePath([0.8, 0.8, 0.2, 0.8], 2);
       }
     }
 
