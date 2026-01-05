@@ -240,6 +240,15 @@ const getSidebarWidth = () => SIDEBAR_WIDTH * uiScale;
 let sidebarVisible = true;
 const getEffectiveSidebarWidth = () => (sidebarVisible ? getSidebarWidth() : 0);
 
+// Minimap configuration
+const MINIMAP_WIDTH = 300;  // Logical pixels
+const MINIMAP_HEIGHT = 225;
+const MINIMAP_PADDING = 12;
+const MINIMAP_ZOOM_OFFSET = 4;  // Shows 2^4 = 16x more area than main view
+const minimapCamera = new Camera();
+minimapCamera.centerX = usCenter.x;
+minimapCamera.centerY = usCenter.y;
+
 const getScreenMatrix = (width: number, height: number) =>
   new Float32Array([2 / width, 0, 0, 0, -2 / height, 0, -1, 1, 1]);
 
@@ -461,6 +470,10 @@ const viewportDragState = {
   targetPaneId: null as string | null,
   sourcePaneId: null as string | null,
   lastWorld: { x: 0, y: 0 },
+};
+
+const minimapDragState = {
+  active: false,
 };
 
 const VIEWPORT_HANDLE_SIZE_PX = 36;
@@ -692,6 +705,43 @@ const isPointInSidebar = (screenX: number): boolean => {
   return sidebarVisible && screenX < getSidebarWidth();
 };
 
+// Minimap helper functions
+const getMinimapRect = () => {
+  const minimapW = MINIMAP_WIDTH * uiScale;
+  const minimapH = MINIMAP_HEIGHT * uiScale;
+  const minimapPad = MINIMAP_PADDING * uiScale;
+  return {
+    x: canvas.width - minimapW - minimapPad,
+    y: canvas.height - minimapH - minimapPad,  // Screen Y (from top)
+    width: minimapW,
+    height: minimapH,
+  };
+};
+
+const isPointInMinimap = (screenX: number, screenY: number): boolean => {
+  const rect = getMinimapRect();
+  return screenX >= rect.x && screenX <= rect.x + rect.width &&
+         screenY >= rect.y && screenY <= rect.y + rect.height;
+};
+
+const handleMinimapClick = (screenX: number, screenY: number) => {
+  const rect = getMinimapRect();
+  const localX = screenX - rect.x;
+  const localY = screenY - rect.y;
+
+  // Convert to world coordinates using minimap camera
+  const minimapMatrix = minimapCamera.getMatrix(rect.width, rect.height);
+  const world = screenToWorld(localX, localY, minimapMatrix, rect.width, rect.height);
+
+  // Pan active pane to clicked location
+  const pane = paneStates.get(activePaneId);
+  if (pane) {
+    pane.camera.centerX = world.worldX;
+    pane.camera.centerY = world.worldY;
+    tessera.requestRender();
+  }
+};
+
 canvas.addEventListener("mousedown", (event) => {
   if (editableAreasState.dragState) return;
   if (event.button !== 0) return;
@@ -703,6 +753,14 @@ canvas.addEventListener("mousedown", (event) => {
   if (isPointInSidebar(screenX)) {
     return;
   }
+
+  // Handle minimap drag (pan to location)
+  if (isPointInMinimap(screenX, screenY)) {
+    minimapDragState.active = true;
+    handleMinimapClick(screenX, screenY);
+    return;
+  }
+
   updateLayoutCache();
   const splitter = layoutCache.splitters.find((item) => pointInRect(screenX, screenY, item.rect));
   if (splitter) {
@@ -773,6 +831,12 @@ canvas.addEventListener("mousedown", (event) => {
 
 window.addEventListener("mousemove", (event) => {
   const { screenX, screenY } = getPointer(event);
+
+  // Handle minimap drag - update camera position continuously
+  if (minimapDragState.active) {
+    handleMinimapClick(screenX, screenY);
+    return;
+  }
 
   if (viewportDragState.active && viewportDragState.targetPaneId && viewportDragState.sourcePaneId) {
     const context = getPaneContext(screenX, screenY, viewportDragState.sourcePaneId);
@@ -934,6 +998,11 @@ window.addEventListener("mousemove", (event) => {
 });
 
 window.addEventListener("mouseup", (event) => {
+  if (minimapDragState.active) {
+    minimapDragState.active = false;
+    canvas.style.cursor = "grab";
+    return;
+  }
   if (viewportDragState.active) {
     viewportDragState.active = false;
     viewportDragState.targetPaneId = null;
@@ -1430,9 +1499,65 @@ tessera.render = function () {
     draw.end();
   }
 
-  // Render vehicle list UI
+  // Render minimap
   const activePane = paneStates.get(activePaneId);
   const activeRect = layoutCache.rects.get(activePaneId);
+  if (activePane && activeRect) {
+    const minimapW = MINIMAP_WIDTH * uiScale;
+    const minimapH = MINIMAP_HEIGHT * uiScale;
+    const minimapPad = MINIMAP_PADDING * uiScale;
+    const minimapX = this.canvas.width - minimapW - minimapPad;
+    const minimapY = minimapPad;  // WebGL Y from bottom
+
+    // Sync minimap with active pane
+    // Center follows main viewport unless dragging in minimap
+    if (!minimapDragState.active) {
+      minimapCamera.centerX = activePane.camera.centerX;
+      minimapCamera.centerY = activePane.camera.centerY;
+    }
+    minimapCamera.zoom = Math.max(0, activePane.camera.zoom - MINIMAP_ZOOM_OFFSET);
+
+    // Set viewport for minimap
+    gl.enable(gl.SCISSOR_TEST);
+    gl.viewport(minimapX, minimapY, minimapW, minimapH);
+    gl.scissor(minimapX, minimapY, minimapW, minimapH);
+
+    // Render tiles at minimap zoom level
+    this.renderTiles(minimapCamera, minimapW, minimapH);
+
+    // Draw viewport indicator for active pane
+    const minimapMatrix = minimapCamera.getMatrix(minimapW, minimapH);
+    const minimapScreenMatrix = getScreenMatrix(minimapW, minimapH);
+
+    // Transform active pane bounds to minimap screen space
+    const activeBounds = activePane.camera.getVisibleBounds(activeRect.width, activeRect.height);
+    const topLeft = worldToScreen(activeBounds.left, activeBounds.top, minimapMatrix, minimapW, minimapH);
+    const bottomRight = worldToScreen(activeBounds.right, activeBounds.bottom, minimapMatrix, minimapW, minimapH);
+
+    draw.begin(minimapScreenMatrix, minimapW, minimapH);
+
+    // Draw viewport rectangle
+    draw.strokeStyle = [0, 0.9, 0.8, 0.9];  // Cyan
+    draw.lineWidth = 2;
+    draw.strokeRect(
+      topLeft.screenX,
+      topLeft.screenY,
+      bottomRight.screenX - topLeft.screenX,
+      bottomRight.screenY - topLeft.screenY
+    );
+
+    // Draw minimap border
+    draw.strokeStyle = [0.2, 0.4, 0.6, 0.8];
+    draw.lineWidth = 1;
+    draw.strokeRect(0, 0, minimapW, minimapH);
+
+    draw.end();
+
+    gl.disable(gl.SCISSOR_TEST);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  // Render vehicle list UI
   if (activePane && activeRect) {
     const activeBounds = activePane.camera.getVisibleBounds(activeRect.width, activeRect.height);
     const screenMatrix = getScreenMatrix(this.canvas.width, this.canvas.height);
