@@ -18,6 +18,7 @@ export {
   type ScrollbarTheme,
   type LabelTheme,
   type ListTheme,
+  type TextInputTheme,
   DEFAULT_THEME,
   mergeTheme,
 } from "./UITheme";
@@ -31,4 +32,7 @@ export {
   type VirtualListConfig,
   type VirtualListResult,
   type ItemRect,
+  textInput,
+  type TextInputConfig,
+  type TextInputResult,
 } from "./widgets";

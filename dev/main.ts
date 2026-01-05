@@ -12,7 +12,7 @@ import {
   createFontAtlas,
   lonLatToTessera,
 } from "../src/index";
-import { UIContext, virtualList, type ViewBounds } from "../src/ui";
+import { UIContext, virtualList, textInput, type ViewBounds } from "../src/ui";
 import type { Aircraft } from "./adsb";
 import { AircraftRenderer } from "./AircraftRenderer";
 import { BorderRenderer } from "./BorderRenderer";
@@ -111,6 +111,17 @@ const uiContext = new UIContext({
       fontSize: 13 * uiScale,
       dividerColor: [0.2, 0.5, 0.7, 0.15],
       dividerWidth: 1 * uiScale,
+    },
+    textInput: {
+      background: [0.03, 0.06, 0.1, 0.9],
+      focusBackground: [0.05, 0.1, 0.18, 0.95],
+      borderColor: [0.1, 0.3, 0.5, 0.6],
+      focusBorderColor: [0.3, 0.7, 0.9, 0.9],
+      textColor: [0.8, 0.9, 0.95, 1.0],
+      placeholderColor: [0.4, 0.5, 0.6, 0.7],
+      cursorColor: [0.4, 0.8, 1, 1],
+      fontSize: 13 * uiScale,
+      padding: 8 * uiScale,
     },
   },
 });
@@ -1563,18 +1574,37 @@ tessera.render = function () {
 
     // Vehicle list panel (uiScale defined at top of file)
     const listX = 20 * uiScale;
-    const listY = 60 * uiScale;
+    const searchHeight = 28 * uiScale;
+    const headerHeight = 24 * uiScale;
+    const searchY = 20 * uiScale;
+    const listY = searchY + searchHeight + headerHeight + 4 * uiScale;
     const listWidth = 260 * uiScale;
-    const listHeight = Math.min(400 * uiScale, this.canvas.height - 80 * uiScale);
+    const listHeight = Math.min(400 * uiScale, this.canvas.height - listY - 20 * uiScale);
     const theme = uiContext.getTheme();
+
+    // Search box with tactical theme
+    const searchResult = textInput(uiContext, {
+      id: "vehicle-search",
+      x: listX,
+      y: searchY,
+      width: listWidth,
+      height: searchHeight,
+      placeholder: "Search callsign...",
+    });
+
+    // Filter vehicles based on search
+    const searchText = searchResult.value.toUpperCase();
+    const filteredVehicles = searchText
+      ? vehicles.filter(v => v.callsign.toUpperCase().includes(searchText))
+      : vehicles;
 
     // Apply pending scroll adjustment to keep clicked vehicle under mouse
     if (pendingScrollAdjustment) {
       const { vehicleId, targetScreenY, itemHeight } = pendingScrollAdjustment;
       const adjListY = pendingScrollAdjustment.listY;
 
-      // Find the new index of the clicked vehicle in the updated list
-      const newIndex = vehicles.findIndex(v => v.id === vehicleId);
+      // Find the new index of the clicked vehicle in the filtered list
+      const newIndex = filteredVehicles.findIndex(v => v.id === vehicleId);
 
       if (newIndex >= 0) {
         // Calculate scroll offset that places this item at targetScreenY
@@ -1584,7 +1614,7 @@ tessera.render = function () {
         const newScrollOffset = (newIndex * itemHeight) + itemHeight / 2 - (targetScreenY - adjListY);
 
         // Clamp to valid range
-        const contentHeight = vehicles.length * itemHeight;
+        const contentHeight = filteredVehicles.length * itemHeight;
         const maxScroll = Math.max(0, contentHeight - listHeight);
         const clampedOffset = Math.max(0, Math.min(maxScroll, newScrollOffset));
 
@@ -1596,17 +1626,21 @@ tessera.render = function () {
     }
 
     // Panel header
-    uiContext.fillRect(listX, listY - 24 * uiScale, listWidth, 24 * uiScale, theme.panel.background);
-    uiContext.strokeRect(listX, listY - 24 * uiScale, listWidth, 24 * uiScale, theme.panel.borderColor, 1);
-    uiContext.label(`Vehicles in View: ${vehicles.length}`, listX + 8 * uiScale, listY - 8 * uiScale, {
+    const headerY = searchY + searchHeight + 2 * uiScale;
+    uiContext.fillRect(listX, headerY, listWidth, headerHeight, theme.panel.background);
+    uiContext.strokeRect(listX, headerY, listWidth, headerHeight, theme.panel.borderColor, 1);
+    const countLabel = searchText
+      ? `Showing ${filteredVehicles.length} of ${vehicles.length}`
+      : `Vehicles in View: ${vehicles.length}`;
+    uiContext.label(countLabel, listX + 8 * uiScale, headerY + headerHeight / 2 + 4 * uiScale, {
       fontSize: 12 * uiScale,
       color: [0.4, 0.7, 0.8, 1],
     });
 
     // Render the virtualized list
-    const selectedIndex = vehicles.findIndex((v) => v.id === selectedVehicleId);
+    const selectedIndex = filteredVehicles.findIndex((v) => v.id === selectedVehicleId);
     const highlightedIndex = hoveredVehicleId
-      ? vehicles.findIndex((v) => v.id === hoveredVehicleId)
+      ? filteredVehicles.findIndex((v) => v.id === hoveredVehicleId)
       : -1;
     const listResult = virtualList(uiContext, {
       id: "vehicle-list",
@@ -1614,7 +1648,7 @@ tessera.render = function () {
       y: listY,
       width: listWidth,
       height: listHeight,
-      items: vehicles,
+      items: filteredVehicles,
       itemHeight: 28 * uiScale,
       selectedIndex: selectedIndex >= 0 ? selectedIndex : undefined,
       highlightedIndex: highlightedIndex >= 0 ? highlightedIndex : undefined,
@@ -1678,7 +1712,7 @@ tessera.render = function () {
 
     // Update hoveredVehicleId from list hover (for yellow ring on map)
     if (listResult.hoveredIndex !== null) {
-      const listHoveredVehicle = vehicles[listResult.hoveredIndex];
+      const listHoveredVehicle = filteredVehicles[listResult.hoveredIndex];
       if (listHoveredVehicle && hoveredVehicleId !== listHoveredVehicle.id) {
         hoveredVehicleId = listHoveredVehicle.id;
       }

@@ -60,12 +60,25 @@ export interface ListTheme {
   dividerWidth: number;
 }
 
+export interface TextInputTheme {
+  background: Color;
+  focusBackground: Color;
+  borderColor: Color;
+  focusBorderColor: Color;
+  textColor: Color;
+  placeholderColor: Color;
+  cursorColor: Color;
+  fontSize: number;
+  padding: number;
+}
+
 export interface UITheme {
   button: ButtonTheme;
   panel: PanelTheme;
   scrollbar: ScrollbarTheme;
   label: LabelTheme;
   list: ListTheme;
+  textInput: TextInputTheme;
 }
 
 /** Default dark theme with transparency */
@@ -117,6 +130,17 @@ export const DEFAULT_THEME: UITheme = {
     dividerColor: [1, 1, 1, 0.08],
     dividerWidth: 1,
   },
+  textInput: {
+    background: [0.1, 0.1, 0.1, 0.8],
+    focusBackground: [0.12, 0.12, 0.12, 0.95],
+    borderColor: [0.3, 0.3, 0.3, 0.6],
+    focusBorderColor: [0.3, 0.6, 0.9, 0.9],
+    textColor: [0.9, 0.9, 0.9, 1.0],
+    placeholderColor: [0.5, 0.5, 0.5, 0.8],
+    cursorColor: [1, 1, 1, 1],
+    fontSize: 14,
+    padding: 8,
+  },
 };
 
 /** Deep merge a partial theme with the default theme */
@@ -127,5 +151,6 @@ export function mergeTheme(partial: Partial<UITheme>): UITheme {
     scrollbar: { ...DEFAULT_THEME.scrollbar, ...partial.scrollbar },
     label: { ...DEFAULT_THEME.label, ...partial.label },
     list: { ...DEFAULT_THEME.list, ...partial.list },
+    textInput: { ...DEFAULT_THEME.textInput, ...partial.textInput },
   };
 }

@@ -30,6 +30,12 @@ export class InputLayer {
   private mouseDownThisFrame: number = 0; // Bitmask of buttons pressed this frame
   private mouseUpThisFrame: number = 0;   // Bitmask of buttons released this frame
 
+  // Keyboard state
+  private keysDownThisFrame: Set<string> = new Set();
+  private keysUpThisFrame: Set<string> = new Set();
+  private keysHeld: Set<string> = new Set();
+  private inputBuffer: string[] = []; // Characters typed this frame
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.current = { x: 0, y: 0, buttons: 0 };
@@ -44,6 +50,10 @@ export class InputLayer {
     this.canvas.addEventListener("mousemove", this.onMouseMove, { capture: true });
     this.canvas.addEventListener("wheel", this.onWheel, { capture: true, passive: true });
     this.canvas.addEventListener("mouseleave", this.onMouseLeave, { capture: true });
+
+    // Keyboard events on document (global)
+    document.addEventListener("keydown", this.onKeyDown);
+    document.addEventListener("keyup", this.onKeyUp);
   }
 
   private updateModifiers(e: MouseEvent): void {
@@ -90,6 +100,32 @@ export class InputLayer {
     this.current.y = -1;
   };
 
+  private onKeyDown = (e: KeyboardEvent): void => {
+    this.keysDownThisFrame.add(e.key);
+    this.keysHeld.add(e.key);
+
+    // Buffer printable characters (single char, not modified by ctrl/meta)
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      this.inputBuffer.push(e.key);
+    }
+
+    // Update modifiers from keyboard events too
+    this.modifiers.ctrl = e.ctrlKey;
+    this.modifiers.meta = e.metaKey;
+    this.modifiers.shift = e.shiftKey;
+    this.modifiers.alt = e.altKey;
+  };
+
+  private onKeyUp = (e: KeyboardEvent): void => {
+    this.keysUpThisFrame.add(e.key);
+    this.keysHeld.delete(e.key);
+
+    this.modifiers.ctrl = e.ctrlKey;
+    this.modifiers.meta = e.metaKey;
+    this.modifiers.shift = e.shiftKey;
+    this.modifiers.alt = e.altKey;
+  };
+
   /**
    * Called at the start of each frame.
    * Captures current state and resets per-frame values.
@@ -108,6 +144,11 @@ export class InputLayer {
     // Clear per-frame mouse button flags
     this.mouseDownThisFrame = 0;
     this.mouseUpThisFrame = 0;
+
+    // Clear per-frame keyboard state
+    this.keysDownThisFrame.clear();
+    this.keysUpThisFrame.clear();
+    this.inputBuffer = [];
   }
 
   /**
@@ -176,6 +217,34 @@ export class InputLayer {
   }
 
   /**
+   * Check if a key was just pressed this frame.
+   */
+  isKeyDown(key: string): boolean {
+    return this.keysDownThisFrame.has(key);
+  }
+
+  /**
+   * Check if a key was just released this frame.
+   */
+  isKeyUp(key: string): boolean {
+    return this.keysUpThisFrame.has(key);
+  }
+
+  /**
+   * Check if a key is currently held.
+   */
+  isKeyHeld(key: string): boolean {
+    return this.keysHeld.has(key);
+  }
+
+  /**
+   * Get characters typed this frame (printable keys only).
+   */
+  getInputBuffer(): string[] {
+    return this.inputBuffer;
+  }
+
+  /**
    * Mark input as consumed by UI (prevents map interaction).
    */
   consumeInput(): void {
@@ -214,5 +283,7 @@ export class InputLayer {
     this.canvas.removeEventListener("mousemove", this.onMouseMove, { capture: true });
     this.canvas.removeEventListener("wheel", this.onWheel, { capture: true });
     this.canvas.removeEventListener("mouseleave", this.onMouseLeave, { capture: true });
+    document.removeEventListener("keydown", this.onKeyDown);
+    document.removeEventListener("keyup", this.onKeyUp);
   }
 }
