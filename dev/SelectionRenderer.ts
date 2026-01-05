@@ -15,6 +15,7 @@ const selectionBoxFill: [number, number, number, number] = [0.1, 0.6, 1, 0.12];
 const selectionBoxStroke: [number, number, number, number] = [0.1, 0.6, 1, 0.8];
 const selectionRingStroke: [number, number, number, number] = [1, 1, 1, 0.9];
 const selectionDashStroke: [number, number, number, number] = [0.15, 0.9, 0.2, 0.9];
+const hoverDashStroke: [number, number, number, number] = [0.9, 0.8, 0.1, 0.9]; // Yellow
 const destinationLineStroke: [number, number, number, number] = [0.15, 0.9, 0.2, 0.7];
 const destinationDashLength = 10;
 const destinationGapLength = 8;
@@ -158,11 +159,12 @@ export function renderSelectionHighlights(
   aircraftRenderer: AircraftRenderer,
   aircraftSize: number,
   selectedIds: Set<string>,
+  hoveredId: string | null,
   timeSeconds: number,
   lineRenderer: DashedLineRenderer,
   ringRenderer: DashedRingRenderer
 ): void {
-  if (selectedIds.size === 0) return;
+  if (selectedIds.size === 0 && hoveredId === null) return;
 
   lineRenderer.begin(w, h);
   ringRenderer.begin(w, h);
@@ -200,6 +202,30 @@ export function renderSelectionHighlights(
       timeSeconds * selectionDashSpeed,
       selectionDashStroke
     );
+  }
+
+  // Render yellow hover ring
+  if (hoveredId) {
+    const ac = aircraftRenderer.aircraft.find((a) => a.icao24 === hoveredId);
+    if (ac) {
+      const renderX = getWrappedX(ac.x, aircraftSize, bounds.left, bounds.right);
+      if (renderX !== null) {
+        const centerScreen = worldToScreen(renderX, ac.y, matrix, w, h);
+        const radiusWorld = aircraftSize * 2.6;
+        const edgeScreen = worldToScreen(renderX + radiusWorld, ac.y, matrix, w, h);
+        const radiusScreen = Math.abs(edgeScreen.screenX - centerScreen.screenX);
+        ringRenderer.addRing(
+          centerScreen.screenX,
+          centerScreen.screenY,
+          radiusScreen,
+          selectionDashThickness,
+          selectionDashLength,
+          selectionGapLength,
+          timeSeconds * selectionDashSpeed,
+          hoverDashStroke
+        );
+      }
+    }
   }
 
   lineRenderer.render();

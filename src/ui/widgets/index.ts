@@ -9,5 +9,6 @@ export {
   virtualList,
   type VirtualListConfig,
   type VirtualListResult,
+  type VisibleItemInfo,
   type ItemRect,
 } from "./VirtualList";

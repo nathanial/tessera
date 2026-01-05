@@ -26,6 +26,9 @@ export class InputLayer {
   private wheelDelta: number = 0;
   private frameWheelDelta: number = 0;
   private consumed: boolean = false;
+  private modifiers = { ctrl: false, meta: false, shift: false, alt: false };
+  private mouseDownThisFrame: number = 0; // Bitmask of buttons pressed this frame
+  private mouseUpThisFrame: number = 0;   // Bitmask of buttons released this frame
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -43,19 +46,37 @@ export class InputLayer {
     this.canvas.addEventListener("mouseleave", this.onMouseLeave, { capture: true });
   }
 
+  private updateModifiers(e: MouseEvent): void {
+    this.modifiers.ctrl = e.ctrlKey;
+    this.modifiers.meta = e.metaKey;
+    this.modifiers.shift = e.shiftKey;
+    this.modifiers.alt = e.altKey;
+  }
+
   private onMouseDown = (e: MouseEvent): void => {
+    // Track which buttons were just pressed
+    const newButtons = e.buttons & ~this.current.buttons;
+    this.mouseDownThisFrame |= newButtons;
     this.current.buttons = e.buttons;
+    this.updateModifiers(e);
   };
 
   private onMouseUp = (e: MouseEvent): void => {
+    // Track which buttons were just released
+    const releasedButtons = this.current.buttons & ~e.buttons;
+    this.mouseUpThisFrame |= releasedButtons;
     this.current.buttons = e.buttons;
+    this.updateModifiers(e);
   };
 
   private onMouseMove = (e: MouseEvent): void => {
     const rect = this.canvas.getBoundingClientRect();
-    this.current.x = e.clientX - rect.left;
-    this.current.y = e.clientY - rect.top;
+    const dpr = window.devicePixelRatio || 1;
+    // Scale by DPR to match canvas device pixel coordinates
+    this.current.x = (e.clientX - rect.left) * dpr;
+    this.current.y = (e.clientY - rect.top) * dpr;
     this.current.buttons = e.buttons;
+    this.updateModifiers(e);
   };
 
   private onWheel = (e: WheelEvent): void => {
@@ -84,7 +105,9 @@ export class InputLayer {
    * Called at the end of each frame.
    */
   endFrame(): void {
-    // Reserved for future use
+    // Clear per-frame mouse button flags
+    this.mouseDownThisFrame = 0;
+    this.mouseUpThisFrame = 0;
   }
 
   /**
@@ -127,14 +150,14 @@ export class InputLayer {
    * Check if mouse button was just pressed this frame.
    */
   isMouseDown(button: number = 1): boolean {
-    return (this.current.buttons & button) !== 0 && (this.previous.buttons & button) === 0;
+    return (this.mouseDownThisFrame & button) !== 0;
   }
 
   /**
    * Check if mouse button was just released this frame.
    */
   isMouseUp(button: number = 1): boolean {
-    return (this.current.buttons & button) === 0 && (this.previous.buttons & button) !== 0;
+    return (this.mouseUpThisFrame & button) !== 0;
   }
 
   /**
@@ -173,6 +196,13 @@ export class InputLayer {
     const mx = this.current.x;
     const my = this.current.y;
     return mx >= x && mx <= x + width && my >= y && my <= y + height;
+  }
+
+  /**
+   * Check if multi-select modifier is held (Cmd on Mac, Ctrl on Windows/Linux).
+   */
+  isMultiSelectModifier(): boolean {
+    return this.modifiers.meta || this.modifiers.ctrl;
   }
 
   /**

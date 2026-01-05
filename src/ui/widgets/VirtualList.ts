@@ -30,10 +30,18 @@ export interface VirtualListConfig<T> {
   onSelect?: (index: number, item: T) => void;
 }
 
+/** Info about a visible item for connector lines */
+export interface VisibleItemInfo<T> {
+  index: number;
+  item: T;
+  screenY: number; // Center Y of the item row in screen pixels
+}
+
 /** Virtual list result */
-export interface VirtualListResult {
+export interface VirtualListResult<T = unknown> {
   scrollOffset: number;
   visibleRange: { start: number; end: number };
+  visibleItems: VisibleItemInfo<T>[]; // Positions of rendered items
   hoveredIndex: number | null;
   clickedIndex: number | null;
 }
@@ -50,7 +58,7 @@ interface VirtualListState {
 export function virtualList<T>(
   ui: UIContext,
   config: VirtualListConfig<T>
-): VirtualListResult {
+): VirtualListResult<T> {
   const { id, x, y, width, height, items, selectedIndex, renderItem, onSelect } = config;
   const theme = ui.getTheme();
   const listTheme = theme.list;
@@ -107,6 +115,7 @@ export function virtualList<T>(
   // Track hover and click
   let hoveredIndex: number | null = null;
   let clickedIndex: number | null = null;
+  const visibleItems: VisibleItemInfo<T>[] = [];
 
   // Render visible items
   for (let i = startIndex; i < endIndex; i++) {
@@ -126,6 +135,13 @@ export function virtualList<T>(
       width: contentWidth,
       height: itemHeight,
     };
+
+    // Track this visible item for connector lines
+    visibleItems.push({
+      index: i,
+      item,
+      screenY: rowY + itemHeight / 2, // Center Y
+    });
 
     // Check hover
     const isHovered = ui.pointInRect(mouse.x, mouse.y, itemRect);
@@ -191,6 +207,7 @@ export function virtualList<T>(
   return {
     scrollOffset: listState.scrollOffset,
     visibleRange: { start: startIndex, end: endIndex },
+    visibleItems,
     hoveredIndex,
     clickedIndex,
   };

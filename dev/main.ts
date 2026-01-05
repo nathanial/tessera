@@ -55,7 +55,7 @@ import {
   type ScreenRect,
 } from "./SelectionUtils";
 import { TrailRenderer } from "./TrailRenderer";
-import { screenToWorld, worldToScreen } from "./CoordinateUtils";
+import { screenToWorld, worldToScreen, getWrappedX } from "./CoordinateUtils";
 import { renderDebugGrid, renderStatsOverlay } from "./UIController";
 
 console.log(`Tessera v${VERSION}`);
@@ -1005,6 +1005,51 @@ window.addEventListener("mousemove", (event) => {
         canvas.style.cursor = "move";
       }
     }
+
+    // Detect vehicle hover
+    const HIT_RADIUS = 20; // pixels
+    if (!isPointInVehicleListUI(screenX, screenY)) {
+      const context = getPaneContext(screenX, screenY);
+      if (context) {
+        const items = aircraftRenderer.aircraft.map((ac) => ({
+          id: ac.icao24,
+          x: ac.x,
+          y: ac.y,
+        }));
+        const projected = projectSelectionItems(
+          items,
+          context.matrix,
+          context.viewportWidth,
+          context.viewportHeight,
+          context.bounds,
+          0
+        );
+
+        // Find closest aircraft within hit radius
+        // Note: item.screenX/Y and context.localX/Y are both relative to pane origin
+        let closest: string | null = null;
+        let closestDist = HIT_RADIUS;
+        for (const item of projected) {
+          const dx = item.screenX - context.localX;
+          const dy = item.screenY - context.localY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < closestDist) {
+            closestDist = dist;
+            closest = item.id;
+          }
+        }
+
+        if (hoveredVehicleId !== closest) {
+          hoveredVehicleId = closest;
+          tessera.requestRender();
+        }
+      }
+    } else {
+      if (hoveredVehicleId !== null) {
+        hoveredVehicleId = null;
+        tessera.requestRender();
+      }
+    }
   }
 });
 
@@ -1071,7 +1116,26 @@ window.addEventListener("mouseup", (event) => {
 
   if (clickState.active) {
     clickState.active = false;
-    selectionState.selectedIds.clear();
+
+    // Check if clicking on a vehicle
+    if (hoveredVehicleId) {
+      const isMultiSelect = event.metaKey || event.ctrlKey;
+      if (isMultiSelect) {
+        // Toggle selection
+        if (selectionState.selectedIds.has(hoveredVehicleId)) {
+          selectionState.selectedIds.delete(hoveredVehicleId);
+        } else {
+          selectionState.selectedIds.add(hoveredVehicleId);
+        }
+      } else {
+        // Replace selection with just this vehicle
+        selectionState.selectedIds.clear();
+        selectionState.selectedIds.add(hoveredVehicleId);
+      }
+    } else {
+      // Clicking on background - clear selection
+      selectionState.selectedIds.clear();
+    }
     tessera.requestRender();
   }
 });
@@ -1175,6 +1239,7 @@ function getVehiclesInViewport(
 }
 
 let selectedVehicleId: string | null = null;
+let hoveredVehicleId: string | null = null;
 
 // ============================================
 // MAIN RENDER LOOP
@@ -1397,6 +1462,7 @@ tessera.render = function () {
       aircraftRenderer,
       aircraftSize,
       selectionState.selectedIds,
+      hoveredVehicleId,
       now / 1000,
       dashedLineRenderer,
       dashedRingRenderer
@@ -1497,7 +1563,7 @@ tessera.render = function () {
 
     // Render the virtualized list
     const selectedIndex = vehicles.findIndex((v) => v.id === selectedVehicleId);
-    virtualList(uiContext, {
+    const listResult = virtualList(uiContext, {
       id: "vehicle-list",
       x: listX,
       y: listY,
@@ -1530,11 +1596,69 @@ tessera.render = function () {
       },
       onSelect: (index, vehicle) => {
         selectedVehicleId = vehicle.id;
-        // Center camera on selected vehicle
-        activePane.camera.centerX = vehicle.aircraft.x;
-        activePane.camera.centerY = vehicle.aircraft.y;
+
+        // Add to selection (check modifier for multi-select)
+        const isMultiSelect = uiContext.getInput().isMultiSelectModifier();
+        if (isMultiSelect) {
+          // Toggle selection
+          if (selectionState.selectedIds.has(vehicle.id)) {
+            selectionState.selectedIds.delete(vehicle.id);
+          } else {
+            selectionState.selectedIds.add(vehicle.id);
+          }
+        } else {
+          // Replace selection with just this vehicle
+          selectionState.selectedIds.clear();
+          selectionState.selectedIds.add(vehicle.id);
+          // Center camera on selected vehicle
+          activePane.camera.centerX = vehicle.aircraft.x;
+          activePane.camera.centerY = vehicle.aircraft.y;
+        }
       },
     });
+
+    // Update hoveredVehicleId from list hover (for yellow ring on map)
+    if (listResult.hoveredIndex !== null) {
+      const listHoveredVehicle = vehicles[listResult.hoveredIndex];
+      if (listHoveredVehicle && hoveredVehicleId !== listHoveredVehicle.id) {
+        hoveredVehicleId = listHoveredVehicle.id;
+      }
+    }
+
+    // Draw connector line from hovered list item to its vehicle
+    if (listResult.hoveredIndex !== null) {
+      const hoveredItem = listResult.visibleItems.find(v => v.index === listResult.hoveredIndex);
+      if (hoveredItem) {
+        const { item, screenY } = hoveredItem;
+        const aircraft = item.aircraft;
+
+        // Get wrapped X position for this viewport
+        const wrappedX = getWrappedX(aircraft.x, 0, activeBounds.left, activeBounds.right);
+        if (wrappedX !== null) {
+          // Transform to screen coordinates (relative to pane)
+          const paneMatrix = activePane.camera.getMatrix(activeRect.width, activeRect.height);
+          const vehicleScreen = worldToScreen(
+            wrappedX,
+            aircraft.y,
+            paneMatrix,
+            activeRect.width,
+            activeRect.height
+          );
+
+          // Offset by pane position to get canvas coordinates
+          const vehicleCanvasX = vehicleScreen.screenX + activeRect.x;
+          const vehicleCanvasY = vehicleScreen.screenY + activeRect.y;
+
+          // Draw L-shaped line: horizontal to vehicle X, then vertical to vehicle
+          const startX = listX + listWidth; // Right edge of list
+          uiContext.beginPath();
+          uiContext.moveTo(startX, screenY);
+          uiContext.lineTo(vehicleCanvasX, screenY);    // Horizontal to vehicle X
+          uiContext.lineTo(vehicleCanvasX, vehicleCanvasY); // Vertical to vehicle
+          uiContext.strokePath([0.8, 0.8, 0.2, 0.8], 2);
+        }
+      }
+    }
 
     uiContext.popCoordinateSpace();
     uiContext.endFrame();

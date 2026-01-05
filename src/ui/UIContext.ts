@@ -402,6 +402,39 @@ export class UIContext {
     this.drawContext.strokeRect(x, y, width, height);
   }
 
+  // ==================== Path Drawing ====================
+
+  /**
+   * Begin a new path.
+   */
+  beginPath(): void {
+    this.beginDrawing();
+    this.drawContext.beginPath();
+  }
+
+  /**
+   * Move to a point without drawing.
+   */
+  moveTo(x: number, y: number): void {
+    this.drawContext.moveTo(x, y);
+  }
+
+  /**
+   * Draw a line to a point.
+   */
+  lineTo(x: number, y: number): void {
+    this.drawContext.lineTo(x, y);
+  }
+
+  /**
+   * Stroke the current path.
+   */
+  strokePath(color: Color, lineWidth: number = 1): void {
+    this.drawContext.strokeStyle = color;
+    this.drawContext.lineWidth = lineWidth;
+    this.drawContext.stroke();
+  }
+
   // ==================== Cleanup ====================
 
   /**
