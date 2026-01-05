@@ -27,17 +27,27 @@ import {
 import { LabelRenderer } from "./LabelRenderer";
 import {
   clampRatio,
-  collectSplitters,
+  addPaneToTabGroup,
   collectPaneIds,
+  collectPaneTabs,
+  collectSplitters,
+  collectTabGroups,
   computePaneRects,
+  convertToTabGroup,
   countPanes,
   createLayout,
   findPaneAt,
+  findTabGroupContaining,
   removePane,
+  setActiveTab,
   splitLayout,
+  splitLayoutWithPosition,
   type Orientation,
   type PaneRect,
+  type PaneTabInfo,
   type SplitterHandle,
+  type TabGroupInfo,
+  type TabGroupNode,
 } from "./PaneLayout";
 import { SDFCircleRenderer } from "./SDFCircleRenderer";
 import { SensorConeRenderer } from "./SensorConeRenderer";
@@ -156,6 +166,7 @@ const editableAreasState = createEditableAreasState();
 
 interface PaneState {
   id: string;
+  name: string;
   camera: Camera;
   isZooming: boolean;
   showLabels: boolean;
@@ -177,6 +188,9 @@ let measureFn: ((text: string, fontSize: number) => number) | null = null;
 
 const createPaneState = (id: string, sourceId?: string) => {
   const camera = new Camera();
+  // Extract pane number from id (e.g., "pane-5" -> 5) for naming
+  const paneNum = parseInt(id.replace("pane-", ""), 10);
+  const name = `View ${isNaN(paneNum) ? paneCounter : paneNum + 1}`;
   const defaults = {
     showLabels: true,
     showGroups: true,
@@ -197,7 +211,7 @@ const createPaneState = (id: string, sourceId?: string) => {
       defaults.showAreas = source.showAreas;
     }
   }
-  paneStates.set(id, { id, camera, isZooming: false, ...defaults });
+  paneStates.set(id, { id, name, camera, isZooming: false, ...defaults });
 };
 
 const getLabelRenderer = (paneId: string) => {
@@ -226,9 +240,17 @@ if (rootPane) {
 const layoutCache = {
   rects: new Map<string, PaneRect>(),
   splitters: [] as SplitterHandle[],
+  tabGroups: [] as TabGroupInfo[],
+  paneTabs: [] as PaneTabInfo[],
 };
 
 const SPLITTER_THICKNESS = 8;
+
+// Tab header constants
+const TAB_HEADER_HEIGHT = 28;
+const TAB_CLOSE_SIZE = 14;
+const TAB_MIN_WIDTH = 80;
+const TAB_MAX_WIDTH = 160;
 const SPLITTER_DRAW_THICKNESS = 6;
 const SPLITTER_COLOR: [number, number, number, number] = [0.0, 0.95, 0.85, 0.9];
 
@@ -255,10 +277,14 @@ const getScreenMatrix = (width: number, height: number) =>
 const updateLayoutCache = () => {
   layoutCache.rects.clear();
   layoutCache.splitters = [];
+  layoutCache.tabGroups = [];
+  layoutCache.paneTabs = [];
   const sidebarW = getEffectiveSidebarWidth();
   const rootRect = { x: sidebarW, y: 0, width: canvas.width - sidebarW, height: canvas.height };
-  computePaneRects(layout, rootRect, layoutCache.rects);
-  collectSplitters(layout, rootRect, layoutCache.splitters, SPLITTER_THICKNESS);
+  computePaneRects(layout, rootRect, layoutCache.rects, TAB_HEADER_HEIGHT);
+  collectSplitters(layout, rootRect, layoutCache.splitters, SPLITTER_THICKNESS, TAB_HEADER_HEIGHT);
+  collectTabGroups(layout, rootRect, layoutCache.tabGroups);
+  collectPaneTabs(layout, rootRect, layoutCache.paneTabs);
 };
 
 const getPaneContext: PaneContextProvider = (screenX, screenY, paneId) => {
@@ -380,6 +406,7 @@ const syncPaneState = () => {
 
 const contextMenu = document.getElementById("context-menu") as HTMLDivElement | null;
 const goHereButton = document.getElementById("context-go-here") as HTMLButtonElement | null;
+const addTabMenu = document.getElementById("context-add-tab") as HTMLButtonElement | null;
 const splitHorizontalMenu = document.getElementById("context-split-horizontal") as HTMLButtonElement | null;
 const splitVerticalMenu = document.getElementById("context-split-vertical") as HTMLButtonElement | null;
 const removePaneMenu = document.getElementById("context-remove-pane") as HTMLButtonElement | null;
@@ -404,6 +431,7 @@ const showContextMenu = (clientX: number, clientY: number) => {
   }
   const paneCount = countPanes(layout);
   const canSplit = paneCount < MAX_PANES;
+  if (addTabMenu) addTabMenu.disabled = !contextPaneId || !canSplit;
   if (splitHorizontalMenu) splitHorizontalMenu.disabled = !contextPaneId || !canSplit;
   if (splitVerticalMenu) splitVerticalMenu.disabled = !contextPaneId || !canSplit;
   if (removePaneMenu) removePaneMenu.disabled = !contextPaneId || paneCount <= 1;
@@ -638,6 +666,40 @@ if (goHereButton) {
   });
 }
 
+if (addTabMenu) {
+  addTabMenu.addEventListener("click", () => {
+    if (!contextPaneId) return;
+    if (countPanes(layout) >= MAX_PANES) {
+      hideContextMenu();
+      return;
+    }
+
+    const newPaneId = `pane-${paneCounter++}`;
+
+    // Check if target is already in a tab group
+    const tabGroup = findTabGroupContaining(layout, contextPaneId);
+    if (tabGroup) {
+      // Add to existing tab group
+      const result = addPaneToTabGroup(layout, tabGroup.id, newPaneId);
+      if (result.didAdd) {
+        layout = result.node;
+      }
+    } else {
+      // Convert leaf to tab group
+      const result = convertToTabGroup(layout, contextPaneId, newPaneId);
+      if (result.didConvert) {
+        layout = result.node;
+      }
+    }
+
+    createPaneState(newPaneId, contextPaneId);
+    setActivePane(newPaneId);
+    syncPaneState();
+    tessera.requestRender();
+    hideContextMenu();
+  });
+}
+
 if (splitHorizontalMenu) {
   splitHorizontalMenu.addEventListener("click", () => {
     if (!contextPaneId) return;
@@ -693,6 +755,49 @@ fontAtlas.ready.then(() => {
 
 let showDebugGrid = false;
 window.addEventListener("keydown", (event) => {
+  // Handle tab name editing
+  if (tabEditState.active && tabEditState.paneId) {
+    if (event.key === "Enter") {
+      // Confirm edit
+      const pane = paneStates.get(tabEditState.paneId);
+      if (pane && tabEditState.text.trim()) {
+        pane.name = tabEditState.text.trim();
+      }
+      tabEditState.active = false;
+      tabEditState.paneId = null;
+      tabEditState.tabGroupId = null;
+      tabEditState.text = "";
+      tabEditState.tabRect = null;
+      tessera.requestRender();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "Escape") {
+      // Cancel edit
+      tabEditState.active = false;
+      tabEditState.paneId = null;
+      tabEditState.tabGroupId = null;
+      tabEditState.text = "";
+      tabEditState.tabRect = null;
+      tessera.requestRender();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "Backspace") {
+      tabEditState.text = tabEditState.text.slice(0, -1);
+      tessera.requestRender();
+      event.preventDefault();
+      return;
+    }
+    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+      tabEditState.text += event.key;
+      tessera.requestRender();
+      event.preventDefault();
+      return;
+    }
+    return;
+  }
+
   if (event.key === "g" || event.key === "G") {
     showDebugGrid = !showDebugGrid;
     console.log(`Debug grid: ${showDebugGrid ? "ON" : "OFF"}`);
@@ -742,6 +847,174 @@ const handleMinimapClick = (screenX: number, screenY: number) => {
   }
 };
 
+// Tab edit state for inline renaming
+const tabEditState = {
+  active: false,
+  paneId: null as string | null,
+  tabGroupId: null as string | null,
+  text: "",
+  tabRect: null as { x: number; y: number; width: number; height: number } | null,
+};
+
+// Tab hover state for close button visibility
+const tabHoverState = {
+  paneId: null as string | null,
+  isOverClose: false,
+};
+
+// Tab drag state for drag-and-drop to create splits
+const tabDragState = {
+  active: false,
+  paneId: null as string | null,
+  tabGroupId: null as string | null,
+  sourceRect: null as { x: number; y: number; width: number; height: number } | null,
+  startX: 0,
+  startY: 0,
+};
+
+// Drop zone for tab drag
+interface DropZone {
+  type: "left" | "right" | "top" | "bottom" | "center";
+  targetPaneId: string;
+  previewRect: { x: number; y: number; width: number; height: number };
+}
+
+// Tab hit detection
+interface TabHit {
+  tabGroupId: string | null;  // null for single pane tabs
+  paneId: string;
+  tabIndex: number;
+  closeButton: boolean;
+  tabRect: { x: number; y: number; width: number; height: number };
+}
+
+const findTabAt = (screenX: number, screenY: number): TabHit | null => {
+  const headerHeight = TAB_HEADER_HEIGHT * uiScale;
+
+  // Check tab groups first
+  for (const { node, rect } of layoutCache.tabGroups) {
+    // Check if in header area
+    if (screenX < rect.x || screenX > rect.x + rect.width) continue;
+    if (screenY < rect.y || screenY > rect.y + headerHeight) continue;
+
+    const tabCount = node.paneIds.length;
+    const tabWidth = Math.min(TAB_MAX_WIDTH * uiScale, Math.max(TAB_MIN_WIDTH * uiScale, rect.width / tabCount));
+    const tabIndex = Math.floor((screenX - rect.x) / tabWidth);
+
+    if (tabIndex >= 0 && tabIndex < tabCount) {
+      const tabX = rect.x + tabIndex * tabWidth;
+      const closeSize = TAB_CLOSE_SIZE * uiScale;
+      const closePadding = 6 * uiScale;
+      const closeX = tabX + tabWidth - closeSize - closePadding;
+      const closeY = rect.y + (headerHeight - closeSize) / 2;
+
+      const closeButton = screenX >= closeX && screenX <= closeX + closeSize &&
+                          screenY >= closeY && screenY <= closeY + closeSize;
+
+      return {
+        tabGroupId: node.id,
+        paneId: node.paneIds[tabIndex]!,
+        tabIndex,
+        closeButton,
+        tabRect: { x: tabX, y: rect.y, width: tabWidth, height: headerHeight },
+      };
+    }
+  }
+
+  // Check single pane tabs
+  for (const paneTab of layoutCache.paneTabs) {
+    if (paneTab.isTabGroup) continue; // Already handled above
+
+    const { rect, paneId } = paneTab;
+    // Check if in header area
+    if (screenX < rect.x || screenX > rect.x + rect.width) continue;
+    if (screenY < rect.y || screenY > rect.y + headerHeight) continue;
+
+    const tabWidth = Math.min(TAB_MAX_WIDTH * uiScale, rect.width);
+    const closeSize = TAB_CLOSE_SIZE * uiScale;
+    const closePadding = 6 * uiScale;
+    const closeX = rect.x + tabWidth - closeSize - closePadding;
+    const closeY = rect.y + (headerHeight - closeSize) / 2;
+
+    const closeButton = screenX >= closeX && screenX <= closeX + closeSize &&
+                        screenY >= closeY && screenY <= closeY + closeSize;
+
+    return {
+      tabGroupId: null,
+      paneId,
+      tabIndex: 0,
+      closeButton,
+      tabRect: { x: rect.x, y: rect.y, width: tabWidth, height: headerHeight },
+    };
+  }
+
+  return null;
+};
+
+// Detect drop zone for tab drag
+const detectDropZone = (screenX: number, screenY: number): DropZone | null => {
+  for (const paneTab of layoutCache.paneTabs) {
+    const { rect, paneId, isTabGroup, tabGroupNode } = paneTab;
+
+    // Check if mouse is within this pane's area (including header)
+    if (screenX < rect.x || screenX > rect.x + rect.width ||
+        screenY < rect.y || screenY > rect.y + rect.height) {
+      continue;
+    }
+
+    // Determine if this is the source tab group (tab being dragged is from here)
+    const isSourceTabGroup = isTabGroup && tabGroupNode &&
+      tabGroupNode.paneIds.includes(tabDragState.paneId!);
+    const isSourceLeaf = !isTabGroup && paneId === tabDragState.paneId;
+
+    // For single panes (leaf): skip entirely if this is the pane being dragged
+    if (isSourceLeaf) continue;
+
+    // Calculate relative position (0-1) within rect
+    const relX = (screenX - rect.x) / rect.width;
+    const relY = (screenY - rect.y) / rect.height;
+
+    // Edge zones (20% each edge) - allow even from same tab group (creates split)
+    if (relX < 0.2) {
+      return {
+        type: "left",
+        targetPaneId: paneId,
+        previewRect: { x: rect.x, y: rect.y, width: rect.width * 0.5, height: rect.height },
+      };
+    }
+    if (relX > 0.8) {
+      return {
+        type: "right",
+        targetPaneId: paneId,
+        previewRect: { x: rect.x + rect.width * 0.5, y: rect.y, width: rect.width * 0.5, height: rect.height },
+      };
+    }
+    if (relY < 0.2) {
+      return {
+        type: "top",
+        targetPaneId: paneId,
+        previewRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height * 0.5 },
+      };
+    }
+    if (relY > 0.8) {
+      return {
+        type: "bottom",
+        targetPaneId: paneId,
+        previewRect: { x: rect.x, y: rect.y + rect.height * 0.5, width: rect.width, height: rect.height * 0.5 },
+      };
+    }
+
+    // Center zone → stack tabs (but not on same tab group)
+    if (isSourceTabGroup) continue;
+    return { type: "center", targetPaneId: paneId, previewRect: rect };
+  }
+  return null;
+};
+
+// Current mouse position for rendering (updated in mousemove)
+let currentMouseX = 0;
+let currentMouseY = 0;
+
 canvas.addEventListener("mousedown", (event) => {
   if (editableAreasState.dragState) return;
   if (event.button !== 0) return;
@@ -762,6 +1035,63 @@ canvas.addEventListener("mousedown", (event) => {
   }
 
   updateLayoutCache();
+
+  // Handle tab clicks
+  const tabHit = findTabAt(screenX, screenY);
+
+  // Cancel tab edit if clicking outside the edited tab
+  if (tabEditState.active) {
+    if (!tabHit || tabHit.paneId !== tabEditState.paneId) {
+      // Save the edit before closing
+      const pane = paneStates.get(tabEditState.paneId!);
+      if (pane && tabEditState.text.trim()) {
+        pane.name = tabEditState.text.trim();
+      }
+      tabEditState.active = false;
+      tabEditState.paneId = null;
+      tabEditState.tabGroupId = null;
+      tabEditState.text = "";
+      tabEditState.tabRect = null;
+      tessera.requestRender();
+    }
+    // If clicking on the same tab being edited, just consume the click
+    if (tabHit && tabHit.paneId === tabEditState.paneId && !tabHit.closeButton) {
+      return;
+    }
+  }
+
+  if (tabHit) {
+    if (tabHit.closeButton) {
+      // Close the tab (remove pane from group)
+      const result = removePane(layout, tabHit.paneId);
+      if (result.removed && result.node) {
+        layout = result.node;
+        // Clean up pane state
+        paneStates.delete(tabHit.paneId);
+        labelRenderers.delete(tabHit.paneId);
+        // If closed pane was active, switch to another pane
+        if (activePaneId === tabHit.paneId) {
+          const ids = new Set<string>();
+          collectPaneIds(layout, ids);
+          const firstId = ids.values().next().value;
+          if (firstId) {
+            setActivePane(firstId);
+          }
+        }
+        syncPaneState();
+        tessera.requestRender();
+      }
+    } else {
+      // Start potential tab drag (will execute click on mouseup if not dragged)
+      tabDragState.paneId = tabHit.paneId;
+      tabDragState.tabGroupId = tabHit.tabGroupId;
+      tabDragState.sourceRect = tabHit.tabRect;
+      tabDragState.startX = screenX;
+      tabDragState.startY = screenY;
+      tabDragState.active = false; // Not active until drag threshold
+    }
+    return;
+  }
   const splitter = layoutCache.splitters.find((item) => pointInRect(screenX, screenY, item.rect));
   if (splitter) {
     splitterState.active = true;
@@ -829,8 +1159,57 @@ canvas.addEventListener("mousedown", (event) => {
   canvas.style.cursor = "grabbing";
 });
 
+// Double-click to edit tab name
+canvas.addEventListener("dblclick", (event) => {
+  const { screenX, screenY } = getPointer(event);
+
+  updateLayoutCache();
+  const tabHit = findTabAt(screenX, screenY);
+  if (tabHit && !tabHit.closeButton) {
+    const pane = paneStates.get(tabHit.paneId);
+    if (pane) {
+      tabEditState.active = true;
+      tabEditState.paneId = tabHit.paneId;
+      tabEditState.tabGroupId = tabHit.tabGroupId;
+      tabEditState.text = pane.name;
+      tabEditState.tabRect = tabHit.tabRect;
+      tessera.requestRender();
+    }
+  }
+});
+
 window.addEventListener("mousemove", (event) => {
   const { screenX, screenY } = getPointer(event);
+  currentMouseX = screenX;
+  currentMouseY = screenY;
+
+  // Update tab hover state
+  updateLayoutCache();
+  const tabHit = findTabAt(screenX, screenY);
+  const prevHoverPaneId = tabHoverState.paneId;
+  tabHoverState.paneId = tabHit?.paneId ?? null;
+  tabHoverState.isOverClose = tabHit?.closeButton ?? false;
+  if (tabHoverState.paneId !== prevHoverPaneId) {
+    tessera.requestRender();
+  }
+
+  // Check if tab drag should activate (threshold exceeded)
+  if (tabDragState.paneId && !tabDragState.active) {
+    const dx = screenX - tabDragState.startX;
+    const dy = screenY - tabDragState.startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > 5) {
+      tabDragState.active = true;
+      canvas.style.cursor = "grabbing";
+      tessera.requestRender();
+    }
+  }
+
+  // Handle active tab drag - request render for preview
+  if (tabDragState.active) {
+    tessera.requestRender();
+    return; // Don't process other drags while dragging a tab
+  }
 
   // Handle minimap drag - update camera position continuously
   if (minimapDragState.active) {
@@ -998,6 +1377,84 @@ window.addEventListener("mousemove", (event) => {
 });
 
 window.addEventListener("mouseup", (event) => {
+  const { screenX, screenY } = getPointer(event);
+
+  // Handle tab drag drop
+  if (tabDragState.paneId) {
+    const wasActive = tabDragState.active;
+    const draggedPaneId = tabDragState.paneId;
+    const sourceTabGroupId = tabDragState.tabGroupId;
+
+    if (wasActive) {
+      // Execute drop
+      const dropZone = detectDropZone(screenX, screenY);
+      if (dropZone) {
+        // Simple approach: always remove from source, then add to target
+        // Step 1: Remove dragged pane from its current location
+        const removeResult = removePane(layout, draggedPaneId);
+        if (!removeResult.node) {
+          // Layout became empty (shouldn't happen in practice)
+          // Just recreate with the dragged pane
+          layout = createLayout(draggedPaneId);
+        } else {
+          layout = removeResult.node;
+
+          // Step 2: Find target pane - may need adjustment if target was removed
+          // Bug fix: when dragging the active pane from a tab group, targetPaneId
+          // is the active pane (dragged pane itself), which no longer exists after removal
+          let targetPaneId = dropZone.targetPaneId;
+          const remainingPanes = new Set<string>();
+          collectPaneIds(layout, remainingPanes);
+
+          if (!remainingPanes.has(targetPaneId)) {
+            // Target was removed (it was the dragged pane) - use first remaining pane
+            const firstRemaining = remainingPanes.values().next().value;
+            if (firstRemaining) {
+              targetPaneId = firstRemaining;
+            }
+          }
+
+          // Step 3: Add to target location
+          if (dropZone.type === "center") {
+            // Stack tabs
+            const targetGroup = findTabGroupContaining(layout, targetPaneId);
+            if (targetGroup) {
+              const result = addPaneToTabGroup(layout, targetGroup.id, draggedPaneId);
+              if (result.didAdd) layout = result.node;
+            } else {
+              const result = convertToTabGroup(layout, targetPaneId, draggedPaneId);
+              if (result.didConvert) layout = result.node;
+            }
+          } else {
+            // Create split
+            const orientation: Orientation = (dropZone.type === "left" || dropZone.type === "right")
+              ? "vertical" : "horizontal";
+            const newPaneFirst = dropZone.type === "left" || dropZone.type === "top";
+            layout = splitLayoutWithPosition(layout, targetPaneId, orientation, draggedPaneId, newPaneFirst);
+          }
+        }
+
+        setActivePane(draggedPaneId);
+        syncPaneState();
+      }
+    } else {
+      // Was just a click - switch to clicked tab
+      if (sourceTabGroupId) {
+        layout = setActiveTab(layout, sourceTabGroupId, draggedPaneId);
+      }
+      setActivePane(draggedPaneId);
+    }
+
+    // Clear drag state
+    tabDragState.active = false;
+    tabDragState.paneId = null;
+    tabDragState.tabGroupId = null;
+    tabDragState.sourceRect = null;
+    canvas.style.cursor = "grab";
+    tessera.requestRender();
+    return;
+  }
+
   if (minimapDragState.active) {
     minimapDragState.active = false;
     canvas.style.cursor = "grab";
@@ -1499,6 +1956,206 @@ tessera.render = function () {
     draw.end();
   }
 
+  // Render tab headers for all panes
+  if (layoutCache.paneTabs.length > 0) {
+    const tabScreenMatrix = getScreenMatrix(this.canvas.width, this.canvas.height);
+    draw.begin(tabScreenMatrix, this.canvas.width, this.canvas.height);
+
+    for (const paneTab of layoutCache.paneTabs) {
+      const { rect, isTabGroup, tabGroupNode } = paneTab;
+      const headerHeight = TAB_HEADER_HEIGHT * uiScale;
+
+      // Draw header background
+      draw.fillStyle = [0.05, 0.08, 0.12, 1];
+      draw.fillRect(rect.x, rect.y, rect.width, headerHeight);
+
+      if (isTabGroup && tabGroupNode) {
+        // Multiple tabs in a tab group
+        const tabCount = tabGroupNode.paneIds.length;
+        const availableWidth = rect.width;
+        const tabWidth = Math.min(TAB_MAX_WIDTH * uiScale, Math.max(TAB_MIN_WIDTH * uiScale, availableWidth / tabCount));
+
+        for (let i = 0; i < tabCount; i++) {
+          const paneId = tabGroupNode.paneIds[i]!;
+          const isActive = i === tabGroupNode.activeIndex;
+          const tabX = rect.x + i * tabWidth;
+
+          // Tab background
+          const bgColor: [number, number, number, number] = isActive
+            ? [0.12, 0.18, 0.25, 1]
+            : [0.05, 0.08, 0.12, 1];
+          draw.fillStyle = bgColor;
+          draw.fillRect(tabX, rect.y, tabWidth, headerHeight);
+
+          // Tab border (right edge)
+          if (i < tabCount - 1) {
+            draw.fillStyle = [0.2, 0.4, 0.6, 0.5];
+            draw.fillRect(tabX + tabWidth - 1, rect.y + 4, 1, headerHeight - 8);
+          }
+
+          // Bottom border for inactive tabs
+          if (!isActive) {
+            draw.fillStyle = [0.2, 0.4, 0.6, 0.6];
+            draw.fillRect(tabX, rect.y + headerHeight - 1, tabWidth, 1);
+          }
+
+          // Close button (X) - show only on hover
+          const isTabHovered = tabHoverState.paneId === paneId;
+          if (isTabHovered) {
+            const closeSize = TAB_CLOSE_SIZE * uiScale;
+            const closePadding = 6 * uiScale;
+            const closeX = tabX + tabWidth - closeSize - closePadding;
+            const closeY = rect.y + (headerHeight - closeSize) / 2;
+
+            // Red when hovering close button, otherwise gray
+            const isCloseHovered = tabHoverState.isOverClose;
+            draw.strokeStyle = isCloseHovered ? [1, 0.3, 0.3, 1] : [0.7, 0.7, 0.7, 0.8];
+            draw.lineWidth = 1.5 * uiScale;
+            draw.beginPath();
+            draw.moveTo(closeX + 2 * uiScale, closeY + 2 * uiScale);
+            draw.lineTo(closeX + closeSize - 2 * uiScale, closeY + closeSize - 2 * uiScale);
+            draw.stroke();
+            draw.beginPath();
+            draw.moveTo(closeX + closeSize - 2 * uiScale, closeY + 2 * uiScale);
+            draw.lineTo(closeX + 2 * uiScale, closeY + closeSize - 2 * uiScale);
+            draw.stroke();
+          }
+        }
+      } else {
+        // Single pane - one tab (with close button on hover if multiple panes exist)
+        const singlePaneId = paneTab.paneId;
+        const tabWidth = Math.min(TAB_MAX_WIDTH * uiScale, rect.width);
+        draw.fillStyle = [0.12, 0.18, 0.25, 1];
+        draw.fillRect(rect.x, rect.y, tabWidth, headerHeight);
+
+        // Show close button on hover (if pane can be closed)
+        const canClose = countPanes(layout) > 1;
+        const isTabHovered = tabHoverState.paneId === singlePaneId;
+        if (canClose && isTabHovered) {
+          const closeSize = TAB_CLOSE_SIZE * uiScale;
+          const closePadding = 6 * uiScale;
+          const closeX = rect.x + tabWidth - closeSize - closePadding;
+          const closeY = rect.y + (headerHeight - closeSize) / 2;
+
+          const isCloseHovered = tabHoverState.isOverClose;
+          draw.strokeStyle = isCloseHovered ? [1, 0.3, 0.3, 1] : [0.7, 0.7, 0.7, 0.8];
+          draw.lineWidth = 1.5 * uiScale;
+          draw.beginPath();
+          draw.moveTo(closeX + 2 * uiScale, closeY + 2 * uiScale);
+          draw.lineTo(closeX + closeSize - 2 * uiScale, closeY + closeSize - 2 * uiScale);
+          draw.stroke();
+          draw.beginPath();
+          draw.moveTo(closeX + closeSize - 2 * uiScale, closeY + 2 * uiScale);
+          draw.lineTo(closeX + 2 * uiScale, closeY + closeSize - 2 * uiScale);
+          draw.stroke();
+        }
+      }
+
+      // Bottom border for entire header
+      draw.fillStyle = [0.2, 0.4, 0.6, 0.6];
+      draw.fillRect(rect.x, rect.y + headerHeight - 1, rect.width, 1);
+    }
+
+    draw.end();
+
+    // Render tab labels with SDF text
+    sdfRenderer.clearText();
+    for (const paneTab of layoutCache.paneTabs) {
+      const { rect, isTabGroup, tabGroupNode, paneId: singlePaneId } = paneTab;
+      const headerHeight = TAB_HEADER_HEIGHT * uiScale;
+      const fontSize = 12 * uiScale;
+
+      if (isTabGroup && tabGroupNode) {
+        // Multiple tabs
+        const tabCount = tabGroupNode.paneIds.length;
+        const availableWidth = rect.width;
+        const tabWidth = Math.min(TAB_MAX_WIDTH * uiScale, Math.max(TAB_MIN_WIDTH * uiScale, availableWidth / tabCount));
+
+        for (let i = 0; i < tabCount; i++) {
+          const paneId = tabGroupNode.paneIds[i]!;
+          const pane = paneStates.get(paneId);
+          const isActive = i === tabGroupNode.activeIndex;
+          const tabX = rect.x + i * tabWidth;
+          const isEditing = tabEditState.active && tabEditState.paneId === paneId;
+
+          const name = isEditing ? tabEditState.text : (pane?.name ?? paneId);
+          const textColor: [number, number, number, number] = isEditing
+            ? [1, 1, 0.5, 1]  // Yellow when editing
+            : isActive
+              ? [1, 1, 1, 1]
+              : [0.5, 0.6, 0.7, 1];
+
+          // Add cursor when editing
+          const displayText = isEditing ? name + "|" : name;
+          const textPadding = 10 * uiScale;
+
+          sdfRenderer.addText(displayText, tabX + textPadding, rect.y + headerHeight / 2 + fontSize * 0.15, {
+            color: textColor,
+            fontSize,
+            align: "left",
+            haloColor: [0, 0, 0, 0.5],
+            haloWidth: 0.5,
+          });
+        }
+      } else {
+        // Single pane tab
+        const pane = paneStates.get(singlePaneId);
+        const isEditing = tabEditState.active && tabEditState.paneId === singlePaneId;
+        const name = isEditing ? tabEditState.text : (pane?.name ?? singlePaneId);
+        const textColor: [number, number, number, number] = isEditing
+          ? [1, 1, 0.5, 1]
+          : [1, 1, 1, 1];
+        const displayText = isEditing ? name + "|" : name;
+        const textPadding = 10 * uiScale;
+
+        sdfRenderer.addText(displayText, rect.x + textPadding, rect.y + headerHeight / 2 + fontSize * 0.15, {
+          color: textColor,
+          fontSize,
+          align: "left",
+          haloColor: [0, 0, 0, 0.5],
+          haloWidth: 0.5,
+        });
+      }
+    }
+    sdfRenderer.render(tabScreenMatrix, this.canvas.width, this.canvas.height);
+  }
+
+  // Render tab drag drop preview
+  if (tabDragState.active) {
+    const dropZone = detectDropZone(currentMouseX, currentMouseY);
+    if (dropZone) {
+      const previewScreenMatrix = getScreenMatrix(this.canvas.width, this.canvas.height);
+      draw.begin(previewScreenMatrix, this.canvas.width, this.canvas.height);
+
+      // Semi-transparent preview fill
+      const previewColor: [number, number, number, number] = dropZone.type === "center"
+        ? [0.2, 0.8, 0.4, 0.25]  // Green for stacking
+        : [0.2, 0.6, 0.9, 0.25]; // Blue for splitting
+      draw.fillStyle = previewColor;
+      draw.fillRect(
+        dropZone.previewRect.x,
+        dropZone.previewRect.y,
+        dropZone.previewRect.width,
+        dropZone.previewRect.height
+      );
+
+      // Border
+      const borderColor: [number, number, number, number] = dropZone.type === "center"
+        ? [0.2, 0.8, 0.4, 0.8]
+        : [0.2, 0.6, 0.9, 0.8];
+      draw.strokeStyle = borderColor;
+      draw.lineWidth = 2 * uiScale;
+      draw.strokeRect(
+        dropZone.previewRect.x,
+        dropZone.previewRect.y,
+        dropZone.previewRect.width,
+        dropZone.previewRect.height
+      );
+
+      draw.end();
+    }
+  }
+
   // Render minimap
   const activePane = paneStates.get(activePaneId);
   const activeRect = layoutCache.rects.get(activePaneId);
@@ -1822,7 +2479,8 @@ tessera.render = function () {
 
     // Section label with pane indicator
     const paneCount = layoutCache.rects.size;
-    const paneLabel = paneCount > 1 ? `View: ${activePaneId}` : "View Settings";
+    const activePaneState = paneStates.get(activePaneId);
+    const paneLabel = paneCount > 1 ? `View: ${activePaneState?.name ?? activePaneId}` : "View Settings";
     uiContext.label(paneLabel, padding, toggleSectionY, {
       color: [0.4, 0.7, 0.85, 1],
       fontSize: 12 * uiScale,
