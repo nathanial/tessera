@@ -227,20 +227,26 @@ const SPLITTER_THICKNESS = 8;
 const SPLITTER_DRAW_THICKNESS = 6;
 const SPLITTER_COLOR: [number, number, number, number] = [0.0, 0.95, 0.85, 0.9];
 
+// Sidebar dimensions
+const SIDEBAR_WIDTH = 280; // Logical pixels, scaled by uiScale
+const getSidebarWidth = () => SIDEBAR_WIDTH * uiScale;
+
 const getScreenMatrix = (width: number, height: number) =>
   new Float32Array([2 / width, 0, 0, 0, -2 / height, 0, -1, 1, 1]);
 
 const updateLayoutCache = () => {
   layoutCache.rects.clear();
   layoutCache.splitters = [];
-  const rootRect = { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  const sidebarW = getSidebarWidth();
+  const rootRect = { x: sidebarW, y: 0, width: canvas.width - sidebarW, height: canvas.height };
   computePaneRects(layout, rootRect, layoutCache.rects);
   collectSplitters(layout, rootRect, layoutCache.splitters, SPLITTER_THICKNESS);
 };
 
 const getPaneContext: PaneContextProvider = (screenX, screenY, paneId) => {
   updateLayoutCache();
-  const rootRect = { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  const sidebarW = getSidebarWidth();
+  const rootRect = { x: sidebarW, y: 0, width: canvas.width - sidebarW, height: canvas.height };
   const targetId = paneId ?? findPaneAt(layout, rootRect, screenX, screenY);
   if (!targetId) return null;
   if (!paneId) {
@@ -671,13 +677,9 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-// Check if point is within the vehicle list UI bounds
-const isPointInVehicleListUI = (screenX: number, screenY: number): boolean => {
-  const listX = 20 * uiScale;
-  const listY = 60 * uiScale - 24 * uiScale; // Include header
-  const listWidth = 260 * uiScale;
-  const listHeight = Math.min(400 * uiScale, canvas.height - 80 * uiScale) + 24 * uiScale;
-  return screenX >= listX && screenX <= listX + listWidth && screenY >= listY && screenY <= listY + listHeight;
+// Check if point is within the sidebar UI bounds
+const isPointInSidebar = (screenX: number): boolean => {
+  return screenX < getSidebarWidth();
 };
 
 canvas.addEventListener("mousedown", (event) => {
@@ -687,8 +689,8 @@ canvas.addEventListener("mousedown", (event) => {
 
   const { screenX, screenY } = getPointer(event);
 
-  // Skip map interaction if clicking on UI
-  if (isPointInVehicleListUI(screenX, screenY)) {
+  // Skip map interaction if clicking on sidebar
+  if (isPointInSidebar(screenX)) {
     return;
   }
   updateLayoutCache();
@@ -876,7 +878,7 @@ window.addEventListener("mousemove", (event) => {
 
     // Detect vehicle hover
     const HIT_RADIUS = 20; // pixels
-    if (!isPointInVehicleListUI(screenX, screenY)) {
+    if (!isPointInSidebar(screenX)) {
       const context = getPaneContext(screenX, screenY);
       if (context) {
         const items = aircraftRenderer.aircraft.map((ac) => ({
@@ -1015,8 +1017,8 @@ canvas.addEventListener(
     hideContextMenu();
     const { screenX, screenY } = getPointer(event);
 
-    // Skip map zoom if scrolling over UI
-    if (isPointInVehicleListUI(screenX, screenY)) {
+    // Skip map zoom if scrolling over sidebar
+    if (isPointInSidebar(screenX)) {
       tessera.requestRender(); // Still render to update list scroll
       return;
     }
@@ -1420,14 +1422,24 @@ tessera.render = function () {
 
     uiContext.pushScreenSpace();
 
+    // Sidebar dimensions and layout
+    const sidebarW = getSidebarWidth();
+    const padding = 12 * uiScale;
+    const contentWidth = sidebarW - padding * 2;
+
+    // Draw sidebar background
+    uiContext.fillRect(0, 0, sidebarW, this.canvas.height, [0.05, 0.08, 0.12, 0.95]);
+    // Right edge border
+    uiContext.fillRect(sidebarW - 1, 0, 1, this.canvas.height, [0.2, 0.4, 0.6, 0.6]);
+
     // Vehicle list panel (uiScale defined at top of file)
-    const listX = 20 * uiScale;
+    const listX = padding;
     const searchHeight = 28 * uiScale;
     const headerHeight = 24 * uiScale;
-    const searchY = 20 * uiScale;
+    const searchY = padding;
     const listY = searchY + searchHeight + headerHeight + 4 * uiScale;
-    const listWidth = 260 * uiScale;
-    const listHeight = Math.min(400 * uiScale, this.canvas.height - listY - 20 * uiScale);
+    const listWidth = contentWidth;
+    const listHeight = Math.min(300 * uiScale, this.canvas.height - 360 * uiScale);
     const theme = uiContext.getTheme();
 
     // Search box with tactical theme
@@ -1635,20 +1647,19 @@ tessera.render = function () {
       speedX += speedButtonWidth + 4 * uiScale;
     }
 
-    // Help text below speed controls
-    const helpY = speedY + speedButtonHeight + 12 * uiScale;
-    uiContext.label("Shift + drag to select aircraft", listX, helpY, {
-      color: [0.5, 0.65, 0.75, 0.8],
-      fontSize: 11 * uiScale,
-      align: "left",
-    });
-    uiContext.label("Right click for Go Here when selected", listX, helpY + 14 * uiScale, {
-      color: [0.5, 0.65, 0.75, 0.8],
-      fontSize: 11 * uiScale,
-      align: "left",
-    });
+    // Pane toggles section (controls active pane only)
+    let toggleSectionY = speedY + speedButtonHeight + 16 * uiScale;
 
-    // Pane toggle buttons (rendered in each pane's top-left corner)
+    // Section label with pane indicator
+    const paneCount = layoutCache.rects.size;
+    const paneLabel = paneCount > 1 ? `View: ${activePaneId}` : "View Settings";
+    uiContext.label(paneLabel, padding, toggleSectionY, {
+      color: [0.4, 0.7, 0.85, 1],
+      fontSize: 12 * uiScale,
+      align: "left",
+    });
+    toggleSectionY += 18 * uiScale;
+
     const toggleDefs = [
       { key: "labels", label: "Labels", prop: "showLabels" as const },
       { key: "groups", label: "Groups", prop: "showGroups" as const },
@@ -1656,46 +1667,50 @@ tessera.render = function () {
       { key: "trails", label: "Trails", prop: "showTrails" as const },
       { key: "areas", label: "Areas", prop: "showAreas" as const },
     ];
-    const toggleBtnWidth = 70 * uiScale;
-    const toggleBtnHeight = 22 * uiScale;
-    const togglePadding = 10 * uiScale;
+    const toggleBtnWidth = contentWidth;
+    const toggleBtnHeight = 24 * uiScale;
 
-    for (const [paneId, paneRect] of layoutCache.rects) {
-      const pane = paneStates.get(paneId);
-      if (!pane) continue;
+    for (const toggle of toggleDefs) {
+      const isOn = activePane[toggle.prop];
+      const result = toggleButton(uiContext, {
+        id: `sidebar-toggle-${toggle.key}`,
+        x: padding,
+        y: toggleSectionY,
+        width: toggleBtnWidth,
+        height: toggleBtnHeight,
+        label: `${toggle.label}: ${isOn ? "On" : "Off"}`,
+        isOn,
+      });
 
-      let toggleX = paneRect.x + togglePadding;
-      const toggleY = paneRect.y + togglePadding;
-
-      for (const toggle of toggleDefs) {
-        const isOn = pane[toggle.prop];
-        const result = toggleButton(uiContext, {
-          id: `${paneId}-toggle-${toggle.key}`,
-          x: toggleX,
-          y: toggleY,
-          width: toggleBtnWidth,
-          height: toggleBtnHeight,
-          label: `${toggle.label}: ${isOn ? "On" : "Off"}`,
-          isOn,
-        });
-
-        if (result.toggled) {
-          pane[toggle.prop] = !isOn;
-          // Special handling for areas toggle
-          if (toggle.key === "areas" && paneId === activePaneId) {
-            editableAreasState.enabled = !isOn;
-            if (isOn) {
-              editableAreasState.selectedId = null;
-              editableAreasState.activeHandle = null;
-              editableAreasState.dragState = null;
-            }
+      if (result.toggled) {
+        activePane[toggle.prop] = !isOn;
+        // Special handling for areas toggle
+        if (toggle.key === "areas") {
+          editableAreasState.enabled = !isOn;
+          if (isOn) {
+            editableAreasState.selectedId = null;
+            editableAreasState.activeHandle = null;
+            editableAreasState.dragState = null;
           }
-          tessera.requestRender();
         }
-
-        toggleX += toggleBtnWidth + 6 * uiScale;
+        tessera.requestRender();
       }
+
+      toggleSectionY += toggleBtnHeight + 4 * uiScale;
     }
+
+    // Help text at bottom of sidebar
+    const helpY = this.canvas.height - 50 * uiScale;
+    uiContext.label("Shift + drag to select aircraft", padding, helpY, {
+      color: [0.5, 0.65, 0.75, 0.7],
+      fontSize: 11 * uiScale,
+      align: "left",
+    });
+    uiContext.label("Right click for Go Here when selected", padding, helpY + 14 * uiScale, {
+      color: [0.5, 0.65, 0.75, 0.7],
+      fontSize: 11 * uiScale,
+      align: "left",
+    });
 
     uiContext.popCoordinateSpace();
     uiContext.endFrame();

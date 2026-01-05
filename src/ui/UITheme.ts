@@ -82,6 +82,8 @@ export interface ToggleButtonTheme {
   borderColor: Color;
   fontSize: number;
   padding: number;
+  haloColor: Color;
+  haloWidth: number;
 }
 
 export interface UITheme {
