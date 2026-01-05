@@ -236,13 +236,17 @@ const SPLITTER_COLOR: [number, number, number, number] = [0.0, 0.95, 0.85, 0.9];
 const SIDEBAR_WIDTH = 280; // Logical pixels, scaled by uiScale
 const getSidebarWidth = () => SIDEBAR_WIDTH * uiScale;
 
+// Sidebar visibility state
+let sidebarVisible = true;
+const getEffectiveSidebarWidth = () => (sidebarVisible ? getSidebarWidth() : 0);
+
 const getScreenMatrix = (width: number, height: number) =>
   new Float32Array([2 / width, 0, 0, 0, -2 / height, 0, -1, 1, 1]);
 
 const updateLayoutCache = () => {
   layoutCache.rects.clear();
   layoutCache.splitters = [];
-  const sidebarW = getSidebarWidth();
+  const sidebarW = getEffectiveSidebarWidth();
   const rootRect = { x: sidebarW, y: 0, width: canvas.width - sidebarW, height: canvas.height };
   computePaneRects(layout, rootRect, layoutCache.rects);
   collectSplitters(layout, rootRect, layoutCache.splitters, SPLITTER_THICKNESS);
@@ -250,7 +254,7 @@ const updateLayoutCache = () => {
 
 const getPaneContext: PaneContextProvider = (screenX, screenY, paneId) => {
   updateLayoutCache();
-  const sidebarW = getSidebarWidth();
+  const sidebarW = getEffectiveSidebarWidth();
   const rootRect = { x: sidebarW, y: 0, width: canvas.width - sidebarW, height: canvas.height };
   const targetId = paneId ?? findPaneAt(layout, rootRect, screenX, screenY);
   if (!targetId) return null;
@@ -684,7 +688,7 @@ window.addEventListener("keydown", (event) => {
 
 // Check if point is within the sidebar UI bounds
 const isPointInSidebar = (screenX: number): boolean => {
-  return screenX < getSidebarWidth();
+  return sidebarVisible && screenX < getSidebarWidth();
 };
 
 canvas.addEventListener("mousedown", (event) => {
@@ -1442,8 +1446,10 @@ tessera.render = function () {
 
     uiContext.pushScreenSpace();
 
-    // Sidebar dimensions and layout
-    const sidebarW = getSidebarWidth();
+    // Only render sidebar content when visible
+    if (sidebarVisible) {
+      // Sidebar dimensions and layout
+      const sidebarW = getSidebarWidth();
     const padding = 12 * uiScale;
     const contentWidth = sidebarW - padding * 2;
 
@@ -1749,6 +1755,48 @@ tessera.render = function () {
       fontSize: 11 * uiScale,
       align: "left",
     });
+    } // End sidebarVisible block
+
+    // Sidebar toggle button (always visible)
+    const toggleBtnWidth = 28 * uiScale;
+    const toggleBtnHeight = 48 * uiScale;
+    const sidebarW = getSidebarWidth();
+    const toggleBtnX = sidebarVisible ? sidebarW : 0;
+    const toggleBtnY = (this.canvas.height - toggleBtnHeight) / 2;
+    const toggleMouse = uiContext.getMousePosition();
+    const toggleHovered = uiContext.pointInRect(toggleMouse.x, toggleMouse.y, {
+      x: toggleBtnX,
+      y: toggleBtnY,
+      width: toggleBtnWidth,
+      height: toggleBtnHeight,
+    });
+
+    if (toggleHovered) {
+      uiContext.setHovered();
+    }
+
+    // Toggle button background
+    const toggleBg: [number, number, number, number] = toggleHovered
+      ? [0.1, 0.2, 0.3, 0.95]
+      : [0.05, 0.1, 0.15, 0.95];
+    uiContext.fillRect(toggleBtnX, toggleBtnY, toggleBtnWidth, toggleBtnHeight, toggleBg);
+
+    // Toggle button border
+    uiContext.strokeRect(toggleBtnX, toggleBtnY, toggleBtnWidth, toggleBtnHeight, [0.2, 0.4, 0.6, 0.8], 1);
+
+    // Toggle button chevron
+    const chevron = sidebarVisible ? "◀" : "▶";
+    uiContext.label(chevron, toggleBtnX + toggleBtnWidth / 2, toggleBtnY + toggleBtnHeight / 2 + 4 * uiScale, {
+      color: [0.8, 0.9, 1, 1],
+      fontSize: 14 * uiScale,
+      align: "center",
+    });
+
+    // Handle toggle button click
+    if (toggleHovered && uiContext.getInput().isMouseDown()) {
+      sidebarVisible = !sidebarVisible;
+      uiContext.getInput().consumeInput();
+    }
 
     uiContext.popCoordinateSpace();
     uiContext.endFrame();

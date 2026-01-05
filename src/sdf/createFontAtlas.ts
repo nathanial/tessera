@@ -10,7 +10,16 @@ import type { FontAtlasMetadata, GlyphMetrics } from "./types";
 
 /** Characters to include in the atlas */
 const DEFAULT_CHARSET =
-  " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+  // ASCII printable characters
+  " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~" +
+  // Arrows and chevrons
+  "←→↑↓↔↕◀▶▲▼◁▷△▽" +
+  // Common UI symbols
+  "×✓✗•●○■□◆◇★☆" +
+  // Math and technical
+  "±×÷≤≥≠≈∞°′″" +
+  // Punctuation and misc (curly quotes escaped)
+  "…–—''\u201C\u201D«»©®™µ";
 
 export interface FontAtlasOptions {
   /** Font family (default: "Arial") */
