@@ -803,12 +803,26 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
+// Check if point is within the vehicle list UI bounds
+const isPointInVehicleListUI = (screenX: number, screenY: number): boolean => {
+  const listX = 20 * uiScale;
+  const listY = 60 * uiScale - 24 * uiScale; // Include header
+  const listWidth = 260 * uiScale;
+  const listHeight = Math.min(400 * uiScale, canvas.height - 80 * uiScale) + 24 * uiScale;
+  return screenX >= listX && screenX <= listX + listWidth && screenY >= listY && screenY <= listY + listHeight;
+};
+
 canvas.addEventListener("mousedown", (event) => {
   if (editableAreasState.dragState) return;
   if (event.button !== 0) return;
   hideContextMenu();
 
   const { screenX, screenY } = getPointer(event);
+
+  // Skip map interaction if clicking on UI
+  if (isPointInVehicleListUI(screenX, screenY)) {
+    return;
+  }
   updateLayoutCache();
   const splitter = layoutCache.splitters.find((item) => pointInRect(screenX, screenY, item.rect));
   if (splitter) {
@@ -1068,6 +1082,13 @@ canvas.addEventListener(
     event.preventDefault();
     hideContextMenu();
     const { screenX, screenY } = getPointer(event);
+
+    // Skip map zoom if scrolling over UI
+    if (isPointInVehicleListUI(screenX, screenY)) {
+      tessera.requestRender(); // Still render to update list scroll
+      return;
+    }
+
     const context = getPaneContext(screenX, screenY);
     if (!context) return;
     setActivePane(context.paneId);

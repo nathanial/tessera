@@ -68,7 +68,7 @@ export interface UIContextOptions {
  * Integrates with DrawContext for shapes and SDFRenderer for text.
  */
 export class UIContext {
-  readonly gl: WebGL2RenderingContext;
+  private readonly gl: WebGL2RenderingContext;
   readonly drawContext: DrawContext;
   readonly sdfRenderer: SDFRenderer;
 
@@ -296,6 +296,25 @@ export class UIContext {
       width: this.frame?.viewportWidth ?? 0,
       height: this.frame?.viewportHeight ?? 0,
     };
+  }
+
+  // ==================== Clipping ====================
+
+  /**
+   * Push a clip rectangle. All subsequent drawing will be clipped to this rect.
+   * Clip rects can be nested (stacked).
+   */
+  pushClipRect(x: number, y: number, width: number, height: number): void {
+    this.flushDrawing();
+    this.drawContext.pushClipRect(x, y, width, height);
+  }
+
+  /**
+   * Pop the current clip rectangle.
+   */
+  popClipRect(): void {
+    this.flushDrawing();
+    this.drawContext.popClipRect();
   }
 
   // ==================== Basic Widgets ====================

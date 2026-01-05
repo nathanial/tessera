@@ -57,7 +57,6 @@ export function virtualList<T>(
   const scrollbarWidth = theme.scrollbar.width;
   const input = ui.getInput();
   const state = ui.getState();
-  const gl = ui.gl;
 
   const itemHeight = config.itemHeight ?? listTheme.itemHeight;
   const itemCount = items.length;
@@ -102,15 +101,8 @@ export function virtualList<T>(
     ui.strokeRect(x, y, width, height, theme.panel.borderColor, theme.panel.borderWidth);
   }
 
-  // Set up scissor for content clipping
-  const viewport = ui.getViewport();
-  gl.enable(gl.SCISSOR_TEST);
-  gl.scissor(
-    x,
-    viewport.height - y - height, // WebGL Y is inverted
-    contentWidth,
-    height
-  );
+  // Set up clipping for content
+  ui.pushClipRect(x, y, contentWidth, height);
 
   // Track hover and click
   let hoveredIndex: number | null = null;
@@ -123,8 +115,10 @@ export function virtualList<T>(
 
     const rowY = y + startY + (i - startIndex) * itemHeight;
 
-    // Skip if completely outside visible area
-    if (rowY + itemHeight < y || rowY > y + height) continue;
+    // Skip if completely above visible area
+    if (rowY + itemHeight <= y) continue;
+    // Skip if item extends past bottom (text isn't scissor-clipped)
+    if (rowY + itemHeight > y + height) continue;
 
     const itemRect: ItemRect = {
       x: x,
@@ -173,8 +167,8 @@ export function virtualList<T>(
     renderItem(item, i, itemRect, ui);
   }
 
-  // Disable scissor
-  gl.disable(gl.SCISSOR_TEST);
+  // Remove clipping
+  ui.popClipRect();
 
   // Render scrollbar if needed
   if (contentHeight > height) {

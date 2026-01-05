@@ -34,6 +34,9 @@ export class DrawContext implements PathApi {
   private viewportWidth: number = 0;
   private viewportHeight: number = 0;
 
+  // Clipping state
+  private clipStack: Array<{ x: number; y: number; width: number; height: number }> = [];
+
   private inFrame: boolean = false;
   private destroyed: boolean = false;
 
@@ -139,6 +142,9 @@ export class DrawContext implements PathApi {
     // Reset state
     this.state.reset();
     this.pathBuilder.beginPath();
+
+    // Reset clip stack
+    this.clipStack = [];
   }
 
   /**
@@ -369,6 +375,62 @@ export class DrawContext implements PathApi {
       | { type: "MultiPolygon"; coordinates: number[][][][] }
   ): void {
     strokeGeoJSON(this, geometry);
+  }
+
+  // ==================== Clipping ====================
+
+  /**
+   * Push a clip rectangle. All subsequent drawing will be clipped to this rect.
+   * Clip rects can be nested (stacked).
+   */
+  pushClipRect(x: number, y: number, width: number, height: number): void {
+    // Flush any pending geometry before changing scissor state
+    this.flush();
+
+    // Reset renderers for new batch
+    this.fillRenderer.reset();
+    this.strokeRenderer.reset();
+    this.templateManager.reset();
+
+    this.clipStack.push({ x, y, width, height });
+    this.applyScissor();
+  }
+
+  /**
+   * Pop the current clip rectangle.
+   */
+  popClipRect(): void {
+    // Flush any pending geometry before changing scissor state
+    this.flush();
+
+    // Reset renderers for new batch
+    this.fillRenderer.reset();
+    this.strokeRenderer.reset();
+    this.templateManager.reset();
+
+    this.clipStack.pop();
+    this.applyScissor();
+  }
+
+  /**
+   * Apply the current scissor state based on clip stack.
+   */
+  private applyScissor(): void {
+    const gl = this.gl;
+
+    if (this.clipStack.length === 0) {
+      gl.disable(gl.SCISSOR_TEST);
+    } else {
+      const clip = this.clipStack[this.clipStack.length - 1]!;
+      gl.enable(gl.SCISSOR_TEST);
+      // Y-flip for WebGL (origin is bottom-left)
+      gl.scissor(
+        clip.x,
+        this.viewportHeight - clip.y - clip.height,
+        clip.width,
+        clip.height
+      );
+    }
   }
 
   // ==================== Stats ====================
