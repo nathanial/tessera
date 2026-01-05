@@ -12,6 +12,8 @@ import {
   createFontAtlas,
   lonLatToTessera,
 } from "../src/index";
+import { UIContext, virtualList, type ViewBounds } from "../src/ui";
+import type { Aircraft } from "./adsb";
 import { AircraftRenderer } from "./AircraftRenderer";
 import { BorderRenderer } from "./BorderRenderer";
 import { DashedLineRenderer, DashedRingRenderer } from "./DashedSelectionRenderers";
@@ -70,6 +72,40 @@ const draw = tessera.createDrawContext();
 
 // Create SDF text renderer for aircraft labels
 const sdfRenderer = new SDFRenderer(tessera.gl);
+
+// Create UI context for immediate mode UI
+const uiDpr = window.devicePixelRatio || 1;
+const uiScale = uiDpr; // Scale with DPR for crisp rendering
+const uiContext = new UIContext({
+  canvas,
+  gl: tessera.gl,
+  drawContext: draw,
+  sdfRenderer,
+  theme: {
+    scrollbar: {
+      trackColor: [0.15, 0.15, 0.15, 0.8],
+      thumbColor: [0.4, 0.4, 0.4, 0.8],
+      thumbHoverColor: [0.5, 0.5, 0.5, 0.9],
+      thumbActiveColor: [0.6, 0.6, 0.6, 1.0],
+      width: 12 * uiScale,
+      minThumbSize: 24 * uiScale,
+      borderRadius: 6 * uiScale,
+    },
+    list: {
+      itemHeight: 28 * uiScale,
+      itemPadding: 8 * uiScale,
+      itemBackground: [0.1, 0.1, 0.1, 0.8],
+      itemAltBackground: [0.12, 0.12, 0.12, 0.8],
+      itemHoverBackground: [0.25, 0.25, 0.25, 0.8],
+      itemSelectedBackground: [0.2, 0.4, 0.6, 0.8],
+      itemTextColor: [0.9, 0.9, 0.9, 1.0],
+      itemSelectedTextColor: [1, 1, 1, 1.0],
+      fontSize: 13 * uiScale,
+      dividerColor: [1, 1, 1, 0.08],
+      dividerWidth: 1 * uiScale,
+    },
+  },
+});
 
 // Create renderers
 const borderRenderer = new BorderRenderer();
@@ -1055,6 +1091,71 @@ canvas.style.cursor = "grab";
 console.log("Controls: drag to pan, shift+drag to select, scroll to zoom, G to toggle debug grid");
 
 // ============================================
+// VEHICLE LIST HELPERS
+// ============================================
+
+interface VehicleListItem {
+  id: string;
+  callsign: string;
+  altitude: string;
+  velocity: string;
+  aircraft: Aircraft;
+}
+
+function formatAltitude(meters: number, onGround: boolean): string {
+  if (onGround) return "GND";
+  const feet = meters * 3.28084;
+  if (feet >= 18000) {
+    return `FL${Math.round(feet / 100)}`;
+  }
+  return `${Math.round(feet).toLocaleString()}ft`;
+}
+
+function formatVelocity(mps: number): string {
+  const knots = mps * 1.94384;
+  return `${Math.round(knots)}kt`;
+}
+
+function getVehiclesInViewport(
+  aircraft: Aircraft[],
+  bounds: ViewBounds
+): VehicleListItem[] {
+  const result: VehicleListItem[] = [];
+
+  for (const ac of aircraft) {
+    // Check Y bounds
+    if (ac.y < bounds.top || ac.y > bounds.bottom) continue;
+
+    // Check X bounds with wrapping
+    let inBounds = false;
+    if (ac.x >= bounds.left && ac.x <= bounds.right) {
+      inBounds = true;
+    } else if (ac.x + 1 >= bounds.left && ac.x + 1 <= bounds.right) {
+      inBounds = true;
+    } else if (ac.x - 1 >= bounds.left && ac.x - 1 <= bounds.right) {
+      inBounds = true;
+    }
+
+    if (inBounds) {
+      result.push({
+        id: ac.icao24,
+        callsign: ac.callsign || "------",
+        altitude: formatAltitude(ac.altitude, ac.onGround),
+        velocity: formatVelocity(ac.velocity),
+        aircraft: ac,
+      });
+    }
+  }
+
+  // Sort by callsign for stable ordering
+  result.sort((a, b) => a.callsign.localeCompare(b.callsign));
+
+  return result;
+}
+
+let selectedVehicleId: string | null = null;
+
+// ============================================
 // MAIN RENDER LOOP
 // ============================================
 
@@ -1340,6 +1441,82 @@ tessera.render = function () {
       }
     }
     draw.end();
+  }
+
+  // Render vehicle list UI
+  const activePane = paneStates.get(activePaneId);
+  const activeRect = layoutCache.rects.get(activePaneId);
+  if (activePane && activeRect) {
+    const activeBounds = activePane.camera.getVisibleBounds(activeRect.width, activeRect.height);
+    const screenMatrix = getScreenMatrix(this.canvas.width, this.canvas.height);
+    const vehicles = getVehiclesInViewport(aircraftRenderer.aircraft, activeBounds);
+
+    uiContext.beginFrame({
+      viewportWidth: this.canvas.width,
+      viewportHeight: this.canvas.height,
+      worldMatrix: activePane.camera.getMatrix(activeRect.width, activeRect.height),
+      bounds: activeBounds,
+    });
+
+    uiContext.pushScreenSpace();
+
+    // Vehicle list panel (uiScale defined at top of file)
+    const listX = 20 * uiScale;
+    const listY = 60 * uiScale;
+    const listWidth = 260 * uiScale;
+    const listHeight = Math.min(400 * uiScale, this.canvas.height - 80 * uiScale);
+    const theme = uiContext.getTheme();
+
+    // Panel header
+    uiContext.fillRect(listX, listY - 24 * uiScale, listWidth, 24 * uiScale, theme.panel.background);
+    uiContext.label(`Vehicles in View: ${vehicles.length}`, listX + 8 * uiScale, listY - 8 * uiScale, {
+      fontSize: 12 * uiScale,
+      color: [0.7, 0.7, 0.7, 1],
+    });
+
+    // Render the virtualized list
+    const selectedIndex = vehicles.findIndex((v) => v.id === selectedVehicleId);
+    virtualList(uiContext, {
+      id: "vehicle-list",
+      x: listX,
+      y: listY,
+      width: listWidth,
+      height: listHeight,
+      items: vehicles,
+      itemHeight: 28 * uiScale,
+      selectedIndex: selectedIndex >= 0 ? selectedIndex : undefined,
+      renderItem: (vehicle, _index, itemRect, ui) => {
+        const textY = itemRect.y + itemRect.height / 2 + 4 * uiScale;
+        const padding = theme.list.itemPadding;
+
+        // Callsign
+        ui.label(vehicle.callsign, itemRect.x + padding, textY, {
+          fontSize: 13 * uiScale,
+          color: theme.list.itemTextColor,
+        });
+
+        // Altitude
+        ui.label(vehicle.altitude, itemRect.x + 140 * uiScale, textY, {
+          fontSize: 11 * uiScale,
+          color: [0.6, 0.8, 0.6, 1],
+        });
+
+        // Velocity
+        ui.label(vehicle.velocity, itemRect.x + 200 * uiScale, textY, {
+          fontSize: 11 * uiScale,
+          color: [0.6, 0.7, 0.9, 1],
+        });
+      },
+      onSelect: (index, vehicle) => {
+        selectedVehicleId = vehicle.id;
+        // Center camera on selected vehicle
+        activePane.camera.centerX = vehicle.aircraft.x;
+        activePane.camera.centerY = vehicle.aircraft.y;
+      },
+    });
+
+    uiContext.popCoordinateSpace();
+    uiContext.endFrame();
   }
 
   this.requestRender();
