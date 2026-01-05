@@ -20,6 +20,7 @@ export {
   type ListTheme,
   type TextInputTheme,
   type ToggleButtonTheme,
+  type TabAreaTheme,
   DEFAULT_THEME,
   mergeTheme,
 } from "./UITheme";
@@ -42,4 +43,8 @@ export {
   toggleButton,
   type ToggleButtonConfig,
   type ToggleButtonResult,
+  tabArea,
+  type TabAreaConfig,
+  type TabAreaResult,
+  type Tab,
 } from "./widgets";

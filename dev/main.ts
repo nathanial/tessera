@@ -12,7 +12,7 @@ import {
   createFontAtlas,
   lonLatToTessera,
 } from "../src/index";
-import { UIContext, virtualList, textInput, toggleButton, type ViewBounds } from "../src/ui";
+import { UIContext, virtualList, textInput, toggleButton, tabArea, type ViewBounds, type Rect, type VirtualListResult } from "../src/ui";
 import type { Aircraft } from "./adsb";
 import { AircraftRenderer } from "./AircraftRenderer";
 import { BorderRenderer } from "./BorderRenderer";
@@ -1113,6 +1113,21 @@ function getVehiclesInViewport(
   return result;
 }
 
+function getAllVehicles(aircraft: Aircraft[]): VehicleListItem[] {
+  const result: VehicleListItem[] = aircraft.map((ac) => ({
+    id: ac.icao24,
+    callsign: ac.callsign || "------",
+    altitude: formatAltitude(ac.altitude, ac.onGround),
+    velocity: formatVelocity(ac.velocity),
+    aircraft: ac,
+  }));
+
+  // Sort by callsign for stable ordering
+  result.sort((a, b) => a.callsign.localeCompare(b.callsign));
+
+  return result;
+}
+
 let selectedVehicleId: string | null = null;
 let hoveredVehicleId: string | null = null;
 let pendingScrollAdjustment: {
@@ -1440,11 +1455,10 @@ tessera.render = function () {
     // Vehicle list panel (uiScale defined at top of file)
     const listX = padding;
     const searchHeight = 28 * uiScale;
-    const headerHeight = 24 * uiScale;
     const searchY = padding;
-    const listY = searchY + searchHeight + headerHeight + 4 * uiScale;
+    const tabAreaY = searchY + searchHeight + 4 * uiScale;
     const listWidth = contentWidth;
-    const listHeight = Math.min(300 * uiScale, this.canvas.height - 360 * uiScale);
+    const tabAreaHeight = Math.min(330 * uiScale, this.canvas.height - 330 * uiScale);
     const theme = uiContext.getTheme();
 
     // Search box with tactical theme
@@ -1457,141 +1471,160 @@ tessera.render = function () {
       placeholder: "Search callsign...",
     });
 
-    // Filter vehicles based on search
+    // Get all vehicles for global tab
+    const allVehicles = getAllVehicles(aircraftRenderer.aircraft);
+
+    // Filter vehicles based on search (applied to both tabs)
     const searchText = searchResult.value.toUpperCase();
-    const filteredVehicles = searchText
+    const filteredVisibleVehicles = searchText
       ? vehicles.filter(v => v.callsign.toUpperCase().includes(searchText))
       : vehicles;
+    const filteredGlobalVehicles = searchText
+      ? allVehicles.filter(v => v.callsign.toUpperCase().includes(searchText))
+      : allVehicles;
 
-    // Apply pending scroll adjustment to keep clicked vehicle under mouse
-    if (pendingScrollAdjustment) {
-      const { vehicleId, targetScreenY, itemHeight } = pendingScrollAdjustment;
-      const adjListY = pendingScrollAdjustment.listY;
+    // Store listResult from active tab for connector lines (set by renderContent callback)
+    const listResultRef: { current: VirtualListResult<VehicleListItem> | null } = { current: null };
+    let activeFilteredVehicles: VehicleListItem[] = [];
 
-      // Find the new index of the clicked vehicle in the filtered list
-      const newIndex = filteredVehicles.findIndex(v => v.id === vehicleId);
-
-      if (newIndex >= 0) {
-        // Calculate scroll offset that places this item at targetScreenY
-        // Item center Y = adjListY + (newIndex * itemHeight) + itemHeight/2 - scrollOffset
-        // We want: targetScreenY = adjListY + (newIndex * itemHeight) + itemHeight/2 - scrollOffset
-        // So: scrollOffset = adjListY + (newIndex * itemHeight) + itemHeight/2 - targetScreenY
-        const newScrollOffset = (newIndex * itemHeight) + itemHeight / 2 - (targetScreenY - adjListY);
-
-        // Clamp to valid range
-        const contentHeight = filteredVehicles.length * itemHeight;
-        const maxScroll = Math.max(0, contentHeight - listHeight);
-        const clampedOffset = Math.max(0, Math.min(maxScroll, newScrollOffset));
-
-        // Update the widget state directly
-        uiContext.getState().setState("vehicle-list", { scrollOffset: clampedOffset });
-      }
-
-      pendingScrollAdjustment = null;
-    }
-
-    // Panel header
-    const headerY = searchY + searchHeight + 2 * uiScale;
-    uiContext.fillRect(listX, headerY, listWidth, headerHeight, theme.panel.background);
-    uiContext.strokeRect(listX, headerY, listWidth, headerHeight, theme.panel.borderColor, 1);
-    const countLabel = searchText
-      ? `Showing ${filteredVehicles.length} of ${vehicles.length}`
-      : `Vehicles in View: ${vehicles.length}`;
-    uiContext.label(countLabel, listX + 8 * uiScale, headerY + headerHeight / 2 + 4 * uiScale, {
-      fontSize: 12 * uiScale,
-      color: [0.4, 0.7, 0.8, 1],
-    });
-
-    // Render the virtualized list
-    const selectedIndex = filteredVehicles.findIndex((v) => v.id === selectedVehicleId);
-    const highlightedIndex = hoveredVehicleId
-      ? filteredVehicles.findIndex((v) => v.id === hoveredVehicleId)
-      : -1;
-    const listResult = virtualList(uiContext, {
-      id: "vehicle-list",
+    // Render tabbed vehicle list
+    const tabHeaderHeight = 28 * uiScale;
+    const tabResult = tabArea(uiContext, {
+      id: "vehicle-tabs",
       x: listX,
-      y: listY,
+      y: tabAreaY,
       width: listWidth,
-      height: listHeight,
-      items: filteredVehicles,
-      itemHeight: 28 * uiScale,
-      selectedIndex: selectedIndex >= 0 ? selectedIndex : undefined,
-      highlightedIndex: highlightedIndex >= 0 ? highlightedIndex : undefined,
-      renderItem: (vehicle, _index, itemRect, ui) => {
-        const textY = itemRect.y + itemRect.height / 2 + 4 * uiScale;
-        const padding = theme.list.itemPadding;
+      height: tabAreaHeight,
+      headerHeight: tabHeaderHeight,
+      fontSize: 12 * uiScale,
+      tabs: [
+        { id: "visible", label: `Visible (${filteredVisibleVehicles.length})` },
+        { id: "global", label: `All (${filteredGlobalVehicles.length})` },
+      ],
+      renderContent: (tabId: string, contentRect: Rect, ui: UIContext) => {
+        const items = tabId === "visible" ? filteredVisibleVehicles : filteredGlobalVehicles;
+        activeFilteredVehicles = items;
 
-        // Callsign
-        ui.label(vehicle.callsign, itemRect.x + padding, textY, {
-          fontSize: 13 * uiScale,
-          color: theme.list.itemTextColor,
-        });
+        // Apply pending scroll adjustment to keep clicked vehicle under mouse
+        if (pendingScrollAdjustment) {
+          const { vehicleId, targetScreenY, itemHeight } = pendingScrollAdjustment;
 
-        // Altitude - tactical green
-        ui.label(vehicle.altitude, itemRect.x + 140 * uiScale, textY, {
-          fontSize: 11 * uiScale,
-          color: [0.3, 0.85, 0.6, 1],
-        });
+          // Find the new index of the clicked vehicle in the filtered list
+          const newIndex = items.findIndex(v => v.id === vehicleId);
 
-        // Velocity - cyan
-        ui.label(vehicle.velocity, itemRect.x + 200 * uiScale, textY, {
-          fontSize: 11 * uiScale,
-          color: [0.4, 0.75, 0.95, 1],
-        });
-      },
-      onSelect: (index, vehicle) => {
-        selectedVehicleId = vehicle.id;
-
-        // Add to selection (check modifier for multi-select)
-        const isMultiSelect = uiContext.getInput().isMultiSelectModifier();
-        if (isMultiSelect) {
-          // Toggle selection (no camera movement, no scroll adjustment needed)
-          if (selectionState.selectedIds.has(vehicle.id)) {
-            selectionState.selectedIds.delete(vehicle.id);
-          } else {
-            selectionState.selectedIds.add(vehicle.id);
+          if (newIndex >= 0) {
+            const newScrollOffset = (newIndex * itemHeight) + itemHeight / 2 - (targetScreenY - contentRect.y);
+            const totalContentHeight = items.length * itemHeight;
+            const maxScroll = Math.max(0, totalContentHeight - contentRect.height);
+            const clampedOffset = Math.max(0, Math.min(maxScroll, newScrollOffset));
+            ui.getState().setState(`vehicle-list-${tabId}`, { scrollOffset: clampedOffset });
           }
-        } else {
-          // Replace selection with just this vehicle
-          selectionState.selectedIds.clear();
-          selectionState.selectedIds.add(vehicle.id);
 
-          // Capture mouse Y before camera move
-          const mouseY = uiContext.getMousePosition().y;
-          const itemHeight = 28 * uiScale;
+          pendingScrollAdjustment = null;
+        }
 
-          // Center camera on selected vehicle
-          activePane.camera.centerX = vehicle.aircraft.x;
-          activePane.camera.centerY = vehicle.aircraft.y;
+        const selectedIndex = items.findIndex((v) => v.id === selectedVehicleId);
+        const highlightedIndex = hoveredVehicleId
+          ? items.findIndex((v) => v.id === hoveredVehicleId)
+          : -1;
 
-          // Store info for scroll adjustment after list rebuilds
-          pendingScrollAdjustment = {
-            vehicleId: vehicle.id,
-            targetScreenY: mouseY,
-            itemHeight: itemHeight,
-            listY: listY,
-          };
+        const listResult = virtualList(ui, {
+          id: `vehicle-list-${tabId}`,
+          x: contentRect.x,
+          y: contentRect.y,
+          width: contentRect.width,
+          height: contentRect.height,
+          items,
+          itemHeight: 28 * uiScale,
+          selectedIndex: selectedIndex >= 0 ? selectedIndex : undefined,
+          highlightedIndex: highlightedIndex >= 0 ? highlightedIndex : undefined,
+          renderItem: (vehicle, _index, itemRect, itemUi) => {
+            const textY = itemRect.y + itemRect.height / 2 + 4 * uiScale;
+            const itemPadding = theme.list.itemPadding;
+
+            // Callsign
+            itemUi.label(vehicle.callsign, itemRect.x + itemPadding, textY, {
+              fontSize: 13 * uiScale,
+              color: theme.list.itemTextColor,
+            });
+
+            // Altitude - tactical green
+            itemUi.label(vehicle.altitude, itemRect.x + 140 * uiScale, textY, {
+              fontSize: 11 * uiScale,
+              color: [0.3, 0.85, 0.6, 1],
+            });
+
+            // Velocity - cyan
+            itemUi.label(vehicle.velocity, itemRect.x + 200 * uiScale, textY, {
+              fontSize: 11 * uiScale,
+              color: [0.4, 0.75, 0.95, 1],
+            });
+          },
+          onSelect: (_index, vehicle) => {
+            selectedVehicleId = vehicle.id;
+
+            // Add to selection (check modifier for multi-select)
+            const isMultiSelect = ui.getInput().isMultiSelectModifier();
+            if (isMultiSelect) {
+              // Toggle selection (no camera movement, no scroll adjustment needed)
+              if (selectionState.selectedIds.has(vehicle.id)) {
+                selectionState.selectedIds.delete(vehicle.id);
+              } else {
+                selectionState.selectedIds.add(vehicle.id);
+              }
+            } else {
+              // Replace selection with just this vehicle
+              selectionState.selectedIds.clear();
+              selectionState.selectedIds.add(vehicle.id);
+
+              // Capture mouse Y before camera move
+              const mouseY = ui.getMousePosition().y;
+              const itemHeight = 28 * uiScale;
+
+              // Center camera on selected vehicle
+              activePane.camera.centerX = vehicle.aircraft.x;
+              activePane.camera.centerY = vehicle.aircraft.y;
+
+              // Store info for scroll adjustment after list rebuilds
+              pendingScrollAdjustment = {
+                vehicleId: vehicle.id,
+                targetScreenY: mouseY,
+                itemHeight: itemHeight,
+                listY: contentRect.y,
+              };
+            }
+          },
+        });
+
+        listResultRef.current = listResult;
+
+        // Update hoveredVehicleId from list hover (for yellow ring on map)
+        if (listResult.hoveredIndex !== null) {
+          const listHoveredVehicle = items[listResult.hoveredIndex];
+          if (listHoveredVehicle && hoveredVehicleId !== listHoveredVehicle.id) {
+            hoveredVehicleId = listHoveredVehicle.id;
+          }
         }
       },
     });
 
-    // Update hoveredVehicleId from list hover (for yellow ring on map)
-    if (listResult.hoveredIndex !== null) {
-      const listHoveredVehicle = filteredVehicles[listResult.hoveredIndex];
-      if (listHoveredVehicle && hoveredVehicleId !== listHoveredVehicle.id) {
-        hoveredVehicleId = listHoveredVehicle.id;
-      }
-    }
+    // Use the active list result for connector lines
+    const filteredVehicles = activeFilteredVehicles;
+    const listResult = listResultRef.current;
 
     // Draw connector line from hovered item to its vehicle
     // Works for both list hover and map hover (if vehicle is visible in list)
-    let connectorItem = listResult.hoveredIndex !== null
-      ? listResult.visibleItems.find(v => v.index === listResult.hoveredIndex)
-      : null;
+    let connectorItem: { item: VehicleListItem; screenY: number } | undefined = undefined;
 
-    // If not hovering on list but hovering on map, find vehicle in visible list items
-    if (!connectorItem && hoveredVehicleId !== null) {
-      connectorItem = listResult.visibleItems.find(v => v.item.id === hoveredVehicleId);
+    if (listResult) {
+      if (listResult.hoveredIndex !== null) {
+        connectorItem = listResult.visibleItems.find(v => v.index === listResult.hoveredIndex);
+      }
+
+      // If not hovering on list but hovering on map, find vehicle in visible list items
+      if (!connectorItem && hoveredVehicleId !== null) {
+        connectorItem = listResult.visibleItems.find(v => v.item.id === hoveredVehicleId);
+      }
     }
 
     if (connectorItem) {
@@ -1629,7 +1662,7 @@ tessera.render = function () {
     const speedValues = [0.1, 1, 5, 10, 20];
     const speedButtonWidth = 44 * uiScale;
     const speedButtonHeight = 24 * uiScale;
-    const speedY = listY + listHeight + 10 * uiScale;
+    const speedY = tabAreaY + tabAreaHeight + 10 * uiScale;
     let speedX = listX;
 
     for (const speed of speedValues) {

@@ -306,6 +306,17 @@ export class UIContext {
    */
   pushClipRect(x: number, y: number, width: number, height: number): void {
     this.flushDrawing();
+
+    // Render any pending SDF text before changing scissor state
+    if (this.frame) {
+      this.sdfRenderer.render(
+        this.currentMatrix!,
+        this.frame.viewportWidth,
+        this.frame.viewportHeight
+      );
+      this.sdfRenderer.clearText();
+    }
+
     this.drawContext.pushClipRect(x, y, width, height);
   }
 

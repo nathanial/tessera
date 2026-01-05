@@ -86,6 +86,18 @@ export interface ToggleButtonTheme {
   haloWidth: number;
 }
 
+export interface TabAreaTheme {
+  headerHeight: number;
+  tabPadding: number;
+  activeBackground: Color;
+  inactiveBackground: Color;
+  hoverBackground: Color;
+  activeTextColor: Color;
+  inactiveTextColor: Color;
+  borderColor: Color;
+  fontSize: number;
+}
+
 export interface UITheme {
   button: ButtonTheme;
   panel: PanelTheme;
@@ -94,6 +106,7 @@ export interface UITheme {
   list: ListTheme;
   textInput: TextInputTheme;
   toggleButton: ToggleButtonTheme;
+  tabArea: TabAreaTheme;
 }
 
 /** Default dark theme with transparency */
@@ -169,6 +182,17 @@ export const DEFAULT_THEME: UITheme = {
     haloColor: [0, 0, 0, 0.6],
     haloWidth: 1.5,
   },
+  tabArea: {
+    headerHeight: 24,
+    tabPadding: 12,
+    activeBackground: [0.1, 0.3, 0.4, 1],
+    inactiveBackground: [0.05, 0.08, 0.12, 1],
+    hoverBackground: [0.08, 0.15, 0.22, 1],
+    activeTextColor: [1, 1, 1, 1],
+    inactiveTextColor: [0.5, 0.6, 0.7, 1],
+    borderColor: [0.2, 0.4, 0.6, 0.6],
+    fontSize: 12,
+  },
 };
 
 /** Deep merge a partial theme with the default theme */
@@ -181,5 +205,6 @@ export function mergeTheme(partial: Partial<UITheme>): UITheme {
     list: { ...DEFAULT_THEME.list, ...partial.list },
     textInput: { ...DEFAULT_THEME.textInput, ...partial.textInput },
     toggleButton: { ...DEFAULT_THEME.toggleButton, ...partial.toggleButton },
+    tabArea: { ...DEFAULT_THEME.tabArea, ...partial.tabArea },
   };
 }
