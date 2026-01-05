@@ -82,11 +82,19 @@ const uiContext = new UIContext({
   drawContext: draw,
   sdfRenderer,
   theme: {
+    // Tactical/radar theme - dark blue tints with cyan accents
+    panel: {
+      background: [0.02, 0.05, 0.1, 0.92],
+      borderColor: [0.1, 0.3, 0.5, 0.6],
+      borderWidth: 1,
+      borderRadius: 4 * uiScale,
+      padding: 12 * uiScale,
+    },
     scrollbar: {
-      trackColor: [0.15, 0.15, 0.15, 0.8],
-      thumbColor: [0.4, 0.4, 0.4, 0.8],
-      thumbHoverColor: [0.5, 0.5, 0.5, 0.9],
-      thumbActiveColor: [0.6, 0.6, 0.6, 1.0],
+      trackColor: [0.05, 0.08, 0.12, 0.8],
+      thumbColor: [0.15, 0.35, 0.45, 0.8],
+      thumbHoverColor: [0.2, 0.5, 0.6, 0.9],
+      thumbActiveColor: [0.3, 0.6, 0.7, 1.0],
       width: 12 * uiScale,
       minThumbSize: 24 * uiScale,
       borderRadius: 6 * uiScale,
@@ -94,14 +102,14 @@ const uiContext = new UIContext({
     list: {
       itemHeight: 28 * uiScale,
       itemPadding: 8 * uiScale,
-      itemBackground: [0.1, 0.1, 0.1, 0.8],
-      itemAltBackground: [0.12, 0.12, 0.12, 0.8],
-      itemHoverBackground: [0.25, 0.25, 0.25, 0.8],
-      itemSelectedBackground: [0.2, 0.4, 0.6, 0.8],
-      itemTextColor: [0.9, 0.9, 0.9, 1.0],
-      itemSelectedTextColor: [1, 1, 1, 1.0],
+      itemBackground: [0.03, 0.06, 0.1, 0.85],
+      itemAltBackground: [0.04, 0.08, 0.13, 0.85],
+      itemHoverBackground: [0.08, 0.18, 0.28, 0.9],
+      itemSelectedBackground: [0.1, 0.35, 0.5, 0.9],
+      itemTextColor: [0.75, 0.85, 0.9, 1.0],
+      itemSelectedTextColor: [0.9, 1, 1, 1.0],
       fontSize: 13 * uiScale,
-      dividerColor: [1, 1, 1, 0.08],
+      dividerColor: [0.2, 0.5, 0.7, 0.15],
       dividerWidth: 1 * uiScale,
     },
   },
@@ -1240,6 +1248,12 @@ function getVehiclesInViewport(
 
 let selectedVehicleId: string | null = null;
 let hoveredVehicleId: string | null = null;
+let pendingScrollAdjustment: {
+  vehicleId: string;
+  targetScreenY: number;
+  itemHeight: number;
+  listY: number;
+} | null = null;
 
 // ============================================
 // MAIN RENDER LOOP
@@ -1554,11 +1568,39 @@ tessera.render = function () {
     const listHeight = Math.min(400 * uiScale, this.canvas.height - 80 * uiScale);
     const theme = uiContext.getTheme();
 
+    // Apply pending scroll adjustment to keep clicked vehicle under mouse
+    if (pendingScrollAdjustment) {
+      const { vehicleId, targetScreenY, itemHeight } = pendingScrollAdjustment;
+      const adjListY = pendingScrollAdjustment.listY;
+
+      // Find the new index of the clicked vehicle in the updated list
+      const newIndex = vehicles.findIndex(v => v.id === vehicleId);
+
+      if (newIndex >= 0) {
+        // Calculate scroll offset that places this item at targetScreenY
+        // Item center Y = adjListY + (newIndex * itemHeight) + itemHeight/2 - scrollOffset
+        // We want: targetScreenY = adjListY + (newIndex * itemHeight) + itemHeight/2 - scrollOffset
+        // So: scrollOffset = adjListY + (newIndex * itemHeight) + itemHeight/2 - targetScreenY
+        const newScrollOffset = (newIndex * itemHeight) + itemHeight / 2 - (targetScreenY - adjListY);
+
+        // Clamp to valid range
+        const contentHeight = vehicles.length * itemHeight;
+        const maxScroll = Math.max(0, contentHeight - listHeight);
+        const clampedOffset = Math.max(0, Math.min(maxScroll, newScrollOffset));
+
+        // Update the widget state directly
+        uiContext.getState().setState("vehicle-list", { scrollOffset: clampedOffset });
+      }
+
+      pendingScrollAdjustment = null;
+    }
+
     // Panel header
     uiContext.fillRect(listX, listY - 24 * uiScale, listWidth, 24 * uiScale, theme.panel.background);
+    uiContext.strokeRect(listX, listY - 24 * uiScale, listWidth, 24 * uiScale, theme.panel.borderColor, 1);
     uiContext.label(`Vehicles in View: ${vehicles.length}`, listX + 8 * uiScale, listY - 8 * uiScale, {
       fontSize: 12 * uiScale,
-      color: [0.7, 0.7, 0.7, 1],
+      color: [0.4, 0.7, 0.8, 1],
     });
 
     // Render the virtualized list
@@ -1586,16 +1628,16 @@ tessera.render = function () {
           color: theme.list.itemTextColor,
         });
 
-        // Altitude
+        // Altitude - tactical green
         ui.label(vehicle.altitude, itemRect.x + 140 * uiScale, textY, {
           fontSize: 11 * uiScale,
-          color: [0.6, 0.8, 0.6, 1],
+          color: [0.3, 0.85, 0.6, 1],
         });
 
-        // Velocity
+        // Velocity - cyan
         ui.label(vehicle.velocity, itemRect.x + 200 * uiScale, textY, {
           fontSize: 11 * uiScale,
-          color: [0.6, 0.7, 0.9, 1],
+          color: [0.4, 0.75, 0.95, 1],
         });
       },
       onSelect: (index, vehicle) => {
@@ -1604,7 +1646,7 @@ tessera.render = function () {
         // Add to selection (check modifier for multi-select)
         const isMultiSelect = uiContext.getInput().isMultiSelectModifier();
         if (isMultiSelect) {
-          // Toggle selection
+          // Toggle selection (no camera movement, no scroll adjustment needed)
           if (selectionState.selectedIds.has(vehicle.id)) {
             selectionState.selectedIds.delete(vehicle.id);
           } else {
@@ -1614,9 +1656,22 @@ tessera.render = function () {
           // Replace selection with just this vehicle
           selectionState.selectedIds.clear();
           selectionState.selectedIds.add(vehicle.id);
+
+          // Capture mouse Y before camera move
+          const mouseY = uiContext.getMousePosition().y;
+          const itemHeight = 28 * uiScale;
+
           // Center camera on selected vehicle
           activePane.camera.centerX = vehicle.aircraft.x;
           activePane.camera.centerY = vehicle.aircraft.y;
+
+          // Store info for scroll adjustment after list rebuilds
+          pendingScrollAdjustment = {
+            vehicleId: vehicle.id,
+            targetScreenY: mouseY,
+            itemHeight: itemHeight,
+            listY: listY,
+          };
         }
       },
     });
@@ -1667,7 +1722,7 @@ tessera.render = function () {
         uiContext.moveTo(startX, screenY);
         uiContext.lineTo(vehicleCanvasX, screenY);    // Horizontal to vehicle X
         uiContext.lineTo(vehicleCanvasX, vehicleCanvasY); // Vertical to vehicle
-        uiContext.strokePath([0.8, 0.8, 0.2, 0.8], 2);
+        uiContext.strokePath([0.3, 0.7, 0.9, 0.8], 2);
       }
     }
 
