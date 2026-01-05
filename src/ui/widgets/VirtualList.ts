@@ -71,7 +71,8 @@ export function virtualList<T>(
   const itemHeight = config.itemHeight ?? listTheme.itemHeight;
   const itemCount = items.length;
   const contentHeight = itemCount * itemHeight;
-  const contentWidth = width - scrollbarWidth;
+  const needsScrollbar = contentHeight > height;
+  const contentWidth = needsScrollbar ? width - scrollbarWidth : width;
 
   // Get persistent scroll state
   const listState = state.getState<VirtualListState>(id, { scrollOffset: 0 });
@@ -128,8 +129,6 @@ export function virtualList<T>(
 
     // Skip if completely above visible area
     if (rowY + itemHeight <= y) continue;
-    // Skip if item extends past bottom (text isn't scissor-clipped)
-    if (rowY + itemHeight > y + height) continue;
 
     const itemRect: ItemRect = {
       x: x,
@@ -190,7 +189,7 @@ export function virtualList<T>(
   ui.popClipRect();
 
   // Render scrollbar if needed
-  if (contentHeight > height) {
+  if (needsScrollbar) {
     const scrollResult = scrollbar(ui, {
       id: `${id}:scrollbar`,
       x: x + width - scrollbarWidth,

@@ -314,6 +314,17 @@ export class UIContext {
    */
   popClipRect(): void {
     this.flushDrawing();
+
+    // Render any pending SDF text within the current scissor
+    if (this.frame) {
+      this.sdfRenderer.render(
+        this.currentMatrix!,
+        this.frame.viewportWidth,
+        this.frame.viewportHeight
+      );
+      this.sdfRenderer.clearText();
+    }
+
     this.drawContext.popClipRect();
   }
 
