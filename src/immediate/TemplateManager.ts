@@ -12,7 +12,7 @@ import {
   fillInstancedVertexShader,
   fillInstancedFragmentShader,
 } from "../shaders/fillInstanced";
-import type { Mat3 } from "../math/mat3";
+import type { Mat4 } from "../math/mat4";
 import type { Color } from "./DrawState";
 
 // Instance data: 2 texels per instance (8 floats)
@@ -176,7 +176,7 @@ export class TemplateManager {
   /**
    * Render all accumulated instances. Call during flush.
    */
-  render(matrix: Mat3): void {
+  render(matrix: Mat4): void {
     if (this.batches.length === 0) return;
 
     const gl = this.gl;
@@ -210,7 +210,7 @@ export class TemplateManager {
 
     // Use instanced program
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.matrixLocation, false, matrix);
+    gl.uniformMatrix4fv(this.matrixLocation, false, matrix);
     gl.uniform1i(this.instanceDataLocation, 0); // Texture unit 0
     gl.uniform1i(this.textureWidthLocation, TEXTURE_WIDTH);
 

@@ -32,7 +32,7 @@ function createMockGL(): WebGL2RenderingContext {
     enableVertexAttribArray: vi.fn(),
     vertexAttribPointer: vi.fn(),
     useProgram: vi.fn(),
-    uniformMatrix3fv: vi.fn(),
+    uniformMatrix4fv: vi.fn(),
     uniform1i: vi.fn(),
     uniform1f: vi.fn(),
     uniform4f: vi.fn(),

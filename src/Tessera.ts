@@ -1,35 +1,46 @@
 /**
- * Tessera - Main renderer class
+ * Tessera - Main renderer class with 3D terrain support
  */
 
+import { Camera3D } from "./Camera3D";
 import { Camera } from "./Camera";
 import { Geometry } from "./Geometry";
 import { TileManager } from "./TileManager";
 import { DrawContext } from "./immediate/DrawContext";
 import { createProgram } from "./shaders/compile";
-import { tileVertexShader, tileFragmentShader } from "./shaders/tile";
+import { terrainVertexShader, terrainFragmentShader } from "./shaders/terrain";
+import { TerrainTileManager, type TerrainMeshData } from "./terrain/TerrainTileManager";
+import { TerrainMeshCache } from "./terrain/TerrainMesh";
+import { HeightSampler } from "./terrain/HeightSampler";
+import type { TileCoord } from "./terrain/TerrainTileLoader";
+import type { Mat4 } from "./math/mat4";
 
 export interface TesseraOptions {
   canvas: HTMLCanvasElement;
+  /** Cesium Ion access token for terrain data */
+  cesiumAccessToken?: string;
 }
 
 export class Tessera {
   readonly canvas: HTMLCanvasElement;
   readonly gl: WebGL2RenderingContext;
-  readonly camera: Camera;
+  readonly camera: Camera3D;
 
   private tileManager: TileManager;
-  private program: WebGLProgram;
-  private quadGeometry: Geometry;
+  private terrainManager: TerrainTileManager | null = null;
+  private terrainMeshCache: TerrainMeshCache;
+  private heightSampler: HeightSampler | null = null;
 
-  // Uniform locations
-  private uniforms: {
-    matrix: WebGLUniformLocation;
-    tileOffset: WebGLUniformLocation;
-    tileScale: WebGLUniformLocation;
+  private terrainProgram: WebGLProgram;
+
+  // Terrain shader uniform locations
+  private terrainUniforms: {
+    viewProjection: WebGLUniformLocation;
     texture: WebGLUniformLocation;
     uvOffset: WebGLUniformLocation;
     uvScale: WebGLUniformLocation;
+    minHeight: WebGLUniformLocation;
+    maxHeight: WebGLUniformLocation;
   };
 
   private animationId: number | null = null;
@@ -41,33 +52,52 @@ export class Tessera {
   constructor(options: TesseraOptions) {
     this.canvas = options.canvas;
 
-    const gl = this.canvas.getContext("webgl2");
+    // Request WebGL2 context with depth buffer
+    const gl = this.canvas.getContext("webgl2", {
+      depth: true,
+      antialias: true,
+    });
     if (!gl) {
       throw new Error("WebGL2 not supported");
     }
     this.gl = gl;
 
-    this.camera = new Camera();
+    // Use 3D camera
+    this.camera = new Camera3D();
     this.tileManager = new TileManager(gl, () => this.requestRender());
 
-    // Create shader program
-    this.program = createProgram(gl, tileVertexShader, tileFragmentShader);
+    // Initialize terrain if access token provided
+    if (options.cesiumAccessToken) {
+      this.terrainManager = new TerrainTileManager(options.cesiumAccessToken);
+      this.heightSampler = new HeightSampler(this.terrainManager);
+      // Initialize terrain manager
+      this.terrainManager.initialize().catch((err) => {
+        console.error("Failed to initialize terrain:", err);
+      });
+    }
 
-    // Get uniform locations
-    this.uniforms = {
-      matrix: gl.getUniformLocation(this.program, "u_matrix")!,
-      tileOffset: gl.getUniformLocation(this.program, "u_tileOffset")!,
-      tileScale: gl.getUniformLocation(this.program, "u_tileScale")!,
-      texture: gl.getUniformLocation(this.program, "u_texture")!,
-      uvOffset: gl.getUniformLocation(this.program, "u_uvOffset")!,
-      uvScale: gl.getUniformLocation(this.program, "u_uvScale")!,
+    this.terrainMeshCache = new TerrainMeshCache(gl);
+
+    // Create terrain shader program
+    this.terrainProgram = createProgram(gl, terrainVertexShader, terrainFragmentShader);
+
+    // Get terrain shader uniform locations
+    this.terrainUniforms = {
+      viewProjection: gl.getUniformLocation(this.terrainProgram, "u_viewProjection")!,
+      texture: gl.getUniformLocation(this.terrainProgram, "u_texture")!,
+      uvOffset: gl.getUniformLocation(this.terrainProgram, "u_uvOffset")!,
+      uvScale: gl.getUniformLocation(this.terrainProgram, "u_uvScale")!,
+      minHeight: gl.getUniformLocation(this.terrainProgram, "u_minHeight")!,
+      maxHeight: gl.getUniformLocation(this.terrainProgram, "u_maxHeight")!,
     };
-
-    // Create quad geometry
-    this.quadGeometry = Geometry.createQuad(gl);
 
     // Initial resize
     this.resize();
+  }
+
+  /** Get the height sampler for draping features onto terrain */
+  getHeightSampler(): HeightSampler | null {
+    return this.heightSampler;
   }
 
   /** Resize the canvas to match display size */
@@ -98,18 +128,20 @@ export class Tessera {
     const width = this.canvas.width;
     const height = this.canvas.height;
 
-    // Clear
-    gl.clearColor(0.1, 0.1, 0.1, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    // Update camera matrices
+    const aspectRatio = width / height;
+    this.camera.updateMatrices(aspectRatio);
 
-    // Get visible tiles
-    const tiles = this.tileManager.getVisibleTiles(
-      this.camera.centerX,
-      this.camera.centerY,
-      this.camera.zoom,
-      width,
-      height
-    );
+    // Clear with depth
+    gl.clearColor(0.1, 0.1, 0.1, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // Enable depth testing
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+
+    // Render terrain
+    this.renderTerrain();
 
     // Debug logging (once per second)
     this.frameCount++;
@@ -123,114 +155,130 @@ export class Tessera {
         totalBatches += stats.batches;
         totalInstances += stats.instances;
       }
-      console.log(`[Tessera] frame=${this.frameCount}, tiles=${tiles.length}, batches=${totalBatches}, instances=${totalInstances}, zoom=${this.camera.zoom.toFixed(2)}, center=(${this.camera.centerX.toFixed(4)}, ${this.camera.centerY.toFixed(4)})`);
-      if (tiles.length > 0) {
-        const t = tiles[0]!;
-        console.log(`[Tessera] first tile: z=${t.z}, x=${t.x}, y=${t.y}`);
-      }
+      console.log(
+        `[Tessera] frame=${this.frameCount}, batches=${totalBatches}, instances=${totalInstances}, ` +
+        `zoom=${this.camera.zoom.toFixed(2)}, pitch=${this.camera.pitch.toFixed(1)}, yaw=${this.camera.yaw.toFixed(1)}`
+      );
       this.lastDebugTime = now;
     }
+  }
 
-    // Setup shader
-    gl.useProgram(this.program);
-    this.quadGeometry.bind();
+  /** Render terrain meshes */
+  private renderTerrain(): void {
+    if (!this.terrainManager) return;
 
-    // Camera matrix
-    const matrix = this.camera.getMatrix(width, height);
-    gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
+    const gl = this.gl;
+    const width = this.canvas.width;
+    const height = this.canvas.height;
 
-    // Tile scale (world units per tile)
-    const tileZoom = Math.floor(this.camera.zoom);
-    const numTiles = Math.pow(2, tileZoom);
-    const tileScale = 1 / numTiles;
-    gl.uniform1f(this.uniforms.tileScale, tileScale);
+    // Get visible terrain tiles
+    const bounds = this.camera.getVisibleBounds(width, height);
+    const visibleTiles = this.terrainManager.getVisibleTiles(bounds, this.camera.zoom);
 
-    // Draw each tile (with fallback to lower-zoom tiles)
+    // Setup terrain shader
+    gl.useProgram(this.terrainProgram);
+    gl.uniformMatrix4fv(this.terrainUniforms.viewProjection, false, this.camera.getViewProjectionMatrix());
+
+    // Texture unit
     gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(this.uniforms.texture, 0);
+    gl.uniform1i(this.terrainUniforms.texture, 0);
 
-    let loadedCount = 0;
-    let fallbackCount = 0;
-
-    for (const tile of tiles) {
-      const result = this.tileManager.getTileWithFallback(tile.z, tile.x, tile.y);
-      if (!result) {
-        // No tile available (shouldn't happen after base tiles load)
-        this.requestRender();
-        continue;
-      }
-
-      if (result.isExact) {
-        loadedCount++;
+    // Load and render each terrain tile
+    for (const coord of visibleTiles) {
+      // Try to get terrain mesh
+      const meshData = this.terrainManager.getCachedTile(coord);
+      if (meshData) {
+        this.renderTerrainTile(meshData, coord);
       } else {
-        fallbackCount++;
-        // Request render to check if exact tile has loaded
-        this.requestRender();
+        // Request terrain tile to load
+        this.terrainManager.getTile(coord).then((data) => {
+          if (data) {
+            this.requestRender();
+          }
+        });
       }
+    }
+  }
 
-      gl.bindTexture(gl.TEXTURE_2D, result.texture);
-      // Use worldX for positioning (unwrapped), tile.x is for texture lookup
-      gl.uniform2f(this.uniforms.tileOffset, tile.worldX, tile.y);
-      gl.uniform2f(this.uniforms.uvOffset, result.uvOffset[0], result.uvOffset[1]);
-      gl.uniform1f(this.uniforms.uvScale, result.uvScale);
-      this.quadGeometry.draw();
+  /** Render a single terrain tile */
+  private renderTerrainTile(meshData: TerrainMeshData, coord: TileCoord): void {
+    const gl = this.gl;
+
+    // Get or create GPU mesh
+    const mesh = this.terrainMeshCache.getOrCreate(meshData);
+
+    // Get raster tile texture for this terrain tile
+    // Map terrain tile to raster tile (they may be at different zoom levels)
+    const rasterResult = this.tileManager.getTileWithFallback(coord.z, coord.x, coord.y);
+
+    if (rasterResult) {
+      gl.bindTexture(gl.TEXTURE_2D, rasterResult.texture);
+      gl.uniform2f(this.terrainUniforms.uvOffset, rasterResult.uvOffset[0], rasterResult.uvOffset[1]);
+      gl.uniform1f(this.terrainUniforms.uvScale, rasterResult.uvScale);
+    } else {
+      // No texture available, request render when it loads
+      this.requestRender();
+      // Use default gray color by setting invalid UV
+      gl.uniform2f(this.terrainUniforms.uvOffset, 0, 0);
+      gl.uniform1f(this.terrainUniforms.uvScale, 1);
     }
 
-    if (now - this.lastDebugTime < 100 && (loadedCount > 0 || fallbackCount > 0)) {
-      console.log(`[Tessera] rendered ${loadedCount} exact + ${fallbackCount} fallback / ${tiles.length} tiles`);
-    }
+    // Set height range for shading
+    gl.uniform1f(this.terrainUniforms.minHeight, meshData.minHeight);
+    gl.uniform1f(this.terrainUniforms.maxHeight, meshData.maxHeight);
 
-    this.quadGeometry.unbind();
+    // Draw terrain mesh
+    mesh.draw();
   }
 
   /**
    * Render tiles for a given camera and viewport size.
-   * Assumes viewport/scissor are already configured by the caller.
+   * This method renders the terrain with raster tile textures.
+   * For use with multiple viewports/panes.
+   * Accepts both Camera (2D) and Camera3D for backward compatibility.
    */
-  renderTiles(camera: Camera, viewportWidth: number, viewportHeight: number): void {
+  renderTiles(camera: Camera | Camera3D, viewportWidth: number, viewportHeight: number): void {
     const gl = this.gl;
 
-    const tiles = this.tileManager.getVisibleTiles(
-      camera.centerX,
-      camera.centerY,
-      camera.zoom,
-      viewportWidth,
-      viewportHeight
-    );
+    // Check if this is a 3D camera or 2D camera
+    const is3D = camera instanceof Camera3D;
 
-    gl.useProgram(this.program);
-    this.quadGeometry.bind();
+    if (is3D) {
+      // 3D terrain rendering
+      const cam3d = camera as Camera3D;
+      const aspectRatio = viewportWidth / viewportHeight;
+      cam3d.updateMatrices(aspectRatio);
 
-    const matrix = camera.getMatrix(viewportWidth, viewportHeight);
-    gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
-
-    const tileZoom = Math.floor(camera.zoom);
-    const numTiles = Math.pow(2, tileZoom);
-    const tileScale = 1 / numTiles;
-    gl.uniform1f(this.uniforms.tileScale, tileScale);
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(this.uniforms.texture, 0);
-
-    for (const tile of tiles) {
-      const result = this.tileManager.getTileWithFallback(tile.z, tile.x, tile.y);
-      if (!result) {
-        this.requestRender();
-        continue;
+      if (!this.terrainManager) {
+        return;
       }
 
-      if (!result.isExact) {
-        this.requestRender();
-      }
+      const bounds = cam3d.getVisibleBounds(viewportWidth, viewportHeight);
+      const visibleTiles = this.terrainManager.getVisibleTiles(bounds, cam3d.zoom);
 
-      gl.bindTexture(gl.TEXTURE_2D, result.texture);
-      gl.uniform2f(this.uniforms.tileOffset, tile.worldX, tile.y);
-      gl.uniform2f(this.uniforms.uvOffset, result.uvOffset[0], result.uvOffset[1]);
-      gl.uniform1f(this.uniforms.uvScale, result.uvScale);
-      this.quadGeometry.draw();
+      gl.useProgram(this.terrainProgram);
+      gl.uniformMatrix4fv(this.terrainUniforms.viewProjection, false, cam3d.getViewProjectionMatrix());
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(this.terrainUniforms.texture, 0);
+
+      for (const coord of visibleTiles) {
+        const meshData = this.terrainManager.getCachedTile(coord);
+        if (meshData) {
+          this.renderTerrainTile(meshData, coord);
+        } else {
+          this.terrainManager.getTile(coord).then((data) => {
+            if (data) {
+              this.requestRender();
+            }
+          });
+        }
+      }
+    } else {
+      // 2D tile rendering (legacy fallback)
+      // Note: 2D Camera doesn't support terrain - renders nothing
+      // Migrate to Camera3D for terrain support
     }
-
-    this.quadGeometry.unbind();
   }
 
   /** Start the render loop */
@@ -261,8 +309,8 @@ export class Tessera {
   destroy(): void {
     this.stop();
     this.tileManager.destroy();
-    this.gl.deleteProgram(this.program);
-    this.quadGeometry.destroy();
+    this.terrainMeshCache.destroy();
+    this.gl.deleteProgram(this.terrainProgram);
   }
 
   /**
@@ -276,11 +324,11 @@ export class Tessera {
   }
 
   /**
-   * Get the current view-projection matrix.
+   * Get the current view-projection matrix (4x4 for 3D).
    * Useful for passing to DrawContext.begin().
    */
-  getMatrix(): Float32Array {
-    return this.camera.getMatrix(this.canvas.width, this.canvas.height);
+  getMatrix(): Mat4 {
+    return this.camera.getViewProjectionMatrix();
   }
 
   /**

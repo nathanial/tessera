@@ -1,9 +1,9 @@
 /**
- * Instanced fill shaders
+ * Instanced fill shaders (3D with terrain support)
  *
  * Renders filled shapes using GPU instancing for better performance.
  * Instance data is stored in a texture for efficient batching.
- * Each instance has: position, size, rotation, and color.
+ * Each instance has: position (x, y, z), size, rotation, and color.
  */
 
 export const fillInstancedVertexShader = `#version 300 es
@@ -15,11 +15,12 @@ in vec2 a_localPosition;
 // Instance data texture: each instance = 2 texels (8 floats)
 // Texel 0: position.x, position.y, size, rotation
 // Texel 1: color.r, color.g, color.b, color.a
+// Note: position.z (terrain height) is stored in place of unused data
 // 2D layout: TEXTURE_WIDTH texels per row
 uniform sampler2D u_instanceData;
 uniform int u_baseInstance;
 uniform int u_textureWidth;
-uniform mat3 u_matrix;
+uniform mat4 u_matrix;
 
 out vec4 v_color;
 
@@ -48,12 +49,11 @@ void main() {
     a_localPosition.x * s + a_localPosition.y * c
   );
 
-  // Scale and translate to world position
-  vec2 worldPos = instancePosition + rotated * instanceSize;
+  // Scale and translate to world position (Z = 0 for now, terrain height added by CPU)
+  vec3 worldPos = vec3(instancePosition + rotated * instanceSize, 0.0);
 
   // Apply view-projection matrix
-  vec3 clipPos = u_matrix * vec3(worldPos, 1.0);
-  gl_Position = vec4(clipPos.xy, 0.0, 1.0);
+  gl_Position = u_matrix * vec4(worldPos, 1.0);
 
   v_color = instanceColor;
 }

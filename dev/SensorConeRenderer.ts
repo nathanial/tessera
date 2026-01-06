@@ -15,7 +15,7 @@ in float a_rotation;
 in float a_phase;
 in vec4 a_color;
 
-uniform mat3 u_matrix;
+uniform mat4 u_matrix;
 
 out vec2 v_local;
 out float v_phase;
@@ -30,8 +30,8 @@ void main() {
     s * scaled.x + c * scaled.y
   );
   vec2 world = a_center + rotated;
-  vec3 clip = u_matrix * vec3(world, 1.0);
-  gl_Position = vec4(clip.xy, 0.0, 1.0);
+  vec4 clip = u_matrix * vec4(world, 0.0, 1.0);
+  gl_Position = vec4(clip.xy / clip.w, clip.z / clip.w, 1.0);
   v_local = a_local;
   v_phase = a_phase;
   v_color = a_color;
@@ -222,7 +222,7 @@ export class SensorConeRenderer {
     const gl = this.gl;
 
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.matrixUniform, false, this.matrix);
+    gl.uniformMatrix4fv(this.matrixUniform, false, this.matrix);
     gl.uniform1f(this.timeUniform, this.timeSeconds);
     gl.uniform1f(this.unitRadiusUniform, SENSOR_CONE_UNIT_RADIUS);
     gl.uniform1f(this.waveFrequencyUniform, 4.5);

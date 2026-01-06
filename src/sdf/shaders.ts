@@ -1,5 +1,5 @@
 /**
- * SDF Shaders
+ * SDF Shaders (3D with terrain support)
  *
  * Vertex and fragment shaders for Signed Distance Field text and icon rendering.
  * Provides crisp edges at any scale with smoothstep-based anti-aliasing.
@@ -9,27 +9,27 @@
  * SDF vertex shader.
  *
  * Transforms quad vertices and passes texture coordinates to fragment shader.
- * Uses a two-part position: anchor in world space + offset in pixels.
+ * Uses a two-part position: anchor in world space (x, y, z) + offset in pixels.
  *
  * Attributes:
- * - a_anchor: Anchor position in world coordinates
+ * - a_anchor: Anchor position in world coordinates (x, y, z with terrain height)
  * - a_offset: Pixel offset from anchor
  * - a_texCoord: Texture coordinates for atlas lookup
  *
  * Uniforms:
- * - u_matrix: View-projection matrix (mat3)
+ * - u_matrix: View-projection matrix (mat4)
  * - u_viewportWidth: Viewport width in pixels
  * - u_viewportHeight: Viewport height in pixels
  */
 export const sdfVertexShader = `#version 300 es
 precision highp float;
 
-in vec2 a_anchor;
+in vec3 a_anchor;  // x, y, z (z from terrain height)
 in vec2 a_offset;
 in vec2 a_texCoord;
 in vec4 a_color;
 
-uniform mat3 u_matrix;
+uniform mat4 u_matrix;
 uniform float u_viewportWidth;
 uniform float u_viewportHeight;
 
@@ -40,16 +40,16 @@ void main() {
   v_texCoord = a_texCoord;
   v_color = a_color;
 
-  // Transform anchor to clip space (homogeneous coordinates)
-  vec3 anchorClip = u_matrix * vec3(a_anchor, 1.0);
+  // Transform anchor to clip space
+  vec4 anchorClip = u_matrix * vec4(a_anchor, 1.0);
 
-  // Perspective divide for 2D homogeneous coordinates
-  vec2 anchorNDC = anchorClip.xy / anchorClip.z;
+  // Perspective divide
+  vec3 anchorNDC = anchorClip.xyz / anchorClip.w;
 
   // Convert pixel offset to clip space (2.0 because clip space is -1 to 1)
   vec2 offsetClip = a_offset * vec2(2.0 / u_viewportWidth, -2.0 / u_viewportHeight);
 
-  gl_Position = vec4(anchorNDC + offsetClip, 0.0, 1.0);
+  gl_Position = vec4(anchorNDC.xy + offsetClip, anchorNDC.z, 1.0);
 }
 `;
 

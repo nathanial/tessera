@@ -1,17 +1,16 @@
 /**
- * Polygon fill shaders
+ * Polygon fill shaders (3D with terrain support)
  */
 
 export const fillVertexShader = `#version 300 es
 precision highp float;
 
-in vec2 a_position;
+in vec3 a_position;  // x, y, z (z from terrain height)
 
-uniform mat3 u_matrix;
+uniform mat4 u_matrix;
 
 void main() {
-  vec3 pos = u_matrix * vec3(a_position, 1.0);
-  gl_Position = vec4(pos.xy, 0.0, 1.0);
+  gl_Position = u_matrix * vec4(a_position, 1.0);
 }
 `;
 

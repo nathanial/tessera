@@ -11,7 +11,7 @@ import { TemplateManager } from "./TemplateManager";
 import { FillRenderer } from "./FillRenderer";
 import { StrokeRenderer } from "./StrokeRenderer";
 import { fillGeoJSON, strokeGeoJSON, type PathApi } from "./GeoJSONHelpers";
-import type { Mat3 } from "../math/mat3";
+import type { Mat4 } from "../math/mat4";
 
 export interface DrawContextOptions {
   gl: WebGL2RenderingContext;
@@ -30,7 +30,7 @@ export class DrawContext implements PathApi {
   private templateManager: TemplateManager;
 
   // Current matrix (set by render call)
-  private matrix: Mat3 | null = null;
+  private matrix: Mat4 | null = null;
   private viewportWidth: number = 0;
   private viewportHeight: number = 0;
 
@@ -124,7 +124,7 @@ export class DrawContext implements PathApi {
   /**
    * Begin a new frame. Must be called before any drawing commands.
    */
-  begin(matrix: Mat3, viewportWidth: number, viewportHeight: number): void {
+  begin(matrix: Mat4, viewportWidth: number, viewportHeight: number): void {
     if (this.inFrame) {
       throw new Error("Already in frame - call end() first");
     }

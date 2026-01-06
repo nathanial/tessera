@@ -4,7 +4,7 @@
  */
 
 import {
-  Camera,
+  Camera3D,
   SDFRenderer,
   Tessera,
   TextLayout,
@@ -167,7 +167,7 @@ const editableAreasState = createEditableAreasState();
 interface PaneState {
   id: string;
   name: string;
-  camera: Camera;
+  camera: Camera3D;
   isZooming: boolean;
   showLabels: boolean;
   showGroups: boolean;
@@ -187,7 +187,7 @@ const labelRenderers = new Map<string, LabelRenderer>();
 let measureFn: ((text: string, fontSize: number) => number) | null = null;
 
 const createPaneState = (id: string, sourceId?: string) => {
-  const camera = new Camera();
+  const camera = new Camera3D();
   // Extract pane number from id (e.g., "pane-5" -> 5) for naming
   const paneNum = parseInt(id.replace("pane-", ""), 10);
   const name = `View ${isNaN(paneNum) ? paneCounter : paneNum + 1}`;
@@ -267,12 +267,17 @@ const MINIMAP_WIDTH = 300;  // Logical pixels
 const MINIMAP_HEIGHT = 225;
 const MINIMAP_PADDING = 12;
 const MINIMAP_ZOOM_OFFSET = 4;  // Shows 2^4 = 16x more area than main view
-const minimapCamera = new Camera();
+const minimapCamera = new Camera3D();
 minimapCamera.centerX = usCenter.x;
 minimapCamera.centerY = usCenter.y;
 
 const getScreenMatrix = (width: number, height: number) =>
-  new Float32Array([2 / width, 0, 0, 0, -2 / height, 0, -1, 1, 1]);
+  new Float32Array([
+    2 / width, 0, 0, 0,
+    0, -2 / height, 0, 0,
+    0, 0, 1, 0,
+    -1, 1, 0, 1
+  ]);
 
 const updateLayoutCache = () => {
   layoutCache.rects.clear();
@@ -357,7 +362,7 @@ const splitPane = (targetId: string, orientation: Orientation) => {
     const viewHeight = bounds.bottom - bounds.top;
     newPane.camera.centerX = targetPane.camera.centerX + viewWidth * 0.15;
     newPane.camera.centerY = targetPane.camera.centerY + viewHeight * 0.1;
-    newPane.camera.zoom = Math.min(Camera.MAX_ZOOM, targetPane.camera.zoom + 0.75);
+    newPane.camera.zoom = Math.min(Camera3D.MAX_ZOOM, targetPane.camera.zoom + 0.75);
   }
   setActivePane(newPaneId);
   syncPaneState();

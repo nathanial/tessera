@@ -13,7 +13,7 @@ in float a_radius;
 in float a_feather;
 in vec4 a_color;
 
-uniform mat3 u_matrix;
+uniform mat4 u_matrix;
 uniform vec2 u_viewport;
 
 out vec2 v_local;
@@ -22,9 +22,9 @@ out float v_feather;
 out vec4 v_color;
 
 void main() {
-  vec3 clip = u_matrix * vec3(a_center, 1.0);
+  vec4 clip = u_matrix * vec4(a_center, 0.0, 1.0);
   vec2 offset = a_local * a_radius * 2.0 / u_viewport;
-  gl_Position = vec4(clip.xy + offset, 0.0, 1.0);
+  gl_Position = vec4(clip.xy / clip.w + offset, clip.z / clip.w, 1.0);
   v_local = a_local;
   v_radius = a_radius;
   v_feather = a_feather;
@@ -169,7 +169,7 @@ export class SDFCircleRenderer {
     const gl = this.gl;
 
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.matrixUniform, false, this.matrix);
+    gl.uniformMatrix4fv(this.matrixUniform, false, this.matrix);
     gl.uniform2f(this.viewportUniform, this.viewportWidth, this.viewportHeight);
 
     gl.bindVertexArray(this.vao);

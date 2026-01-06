@@ -14,7 +14,7 @@ import { setBlendMode, computeEffectiveColor, type BlendMode } from "./style/ind
 
 // Re-export BlendMode for convenience
 export type { BlendMode } from "./style/index";
-import type { Mat3 } from "./math/mat3";
+import type { Mat4 } from "./math/mat4";
 
 /** RGBA color as [r, g, b, a] with values 0-1 */
 export type Color = [number, number, number, number];
@@ -262,7 +262,7 @@ export class FeatureRenderer {
    * @param viewportWidth - Viewport width in pixels
    * @param viewportHeight - Viewport height in pixels
    */
-  render(matrix: Mat3, viewportWidth: number, viewportHeight: number): void {
+  render(matrix: Mat4, viewportWidth: number, viewportHeight: number): void {
     if (this._destroyed || this.features.length === 0) return;
 
     const gl = this.gl;
@@ -292,7 +292,7 @@ export class FeatureRenderer {
       if (feature.fillGeometry) {
         if (currentProgram !== "fill") {
           gl.useProgram(this.fillProgram);
-          gl.uniformMatrix3fv(this.fillUniforms.matrix, false, matrix);
+          gl.uniformMatrix4fv(this.fillUniforms.matrix, false, matrix);
           currentProgram = "fill";
         }
 
@@ -309,7 +309,7 @@ export class FeatureRenderer {
       if (feature.strokeGeometry) {
         if (currentProgram !== "stroke") {
           gl.useProgram(this.strokeProgram);
-          gl.uniformMatrix3fv(this.strokeUniforms.matrix, false, matrix);
+          gl.uniformMatrix4fv(this.strokeUniforms.matrix, false, matrix);
           gl.uniform2f(this.strokeUniforms.viewport, viewportWidth, viewportHeight);
           currentProgram = "stroke";
         }

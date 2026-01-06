@@ -13,7 +13,7 @@ in float a_size;
 in float a_birth;
 in vec4 a_color;
 
-uniform mat3 u_matrix;
+uniform mat4 u_matrix;
 
 out vec2 v_local;
 out float v_birth;
@@ -21,8 +21,8 @@ out vec4 v_color;
 
 void main() {
   vec2 world = a_center + a_local * a_size;
-  vec3 clip = u_matrix * vec3(world, 1.0);
-  gl_Position = vec4(clip.xy, 0.0, 1.0);
+  vec4 clip = u_matrix * vec4(world, 0.0, 1.0);
+  gl_Position = vec4(clip.xy / clip.w, clip.z / clip.w, 1.0);
   v_local = a_local;
   v_birth = a_birth;
   v_color = a_color;
@@ -176,7 +176,7 @@ export class TrailRenderer {
     const gl = this.gl;
 
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.matrixUniform, false, this.matrix);
+    gl.uniformMatrix4fv(this.matrixUniform, false, this.matrix);
     gl.uniform1f(this.timeUniform, this.timeSeconds);
     gl.uniform1f(this.fadeUniform, this.fadeDuration);
 

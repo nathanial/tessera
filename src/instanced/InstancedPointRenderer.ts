@@ -13,7 +13,7 @@ import {
 } from "./shaders";
 import { createShapeGeometry } from "./shapes";
 import type { PointShape, PointInstance, ShapeGeometry } from "./types";
-import type { Mat3 } from "../math/mat3";
+import type { Mat4 } from "../math/mat4";
 
 /** Bytes per float */
 const FLOAT_SIZE = 4;
@@ -169,7 +169,7 @@ export class InstancedPointRenderer {
    * @param viewportWidth - Viewport width in pixels
    * @param viewportHeight - Viewport height in pixels
    */
-  render(matrix: Mat3, viewportWidth: number, viewportHeight: number): void {
+  render(matrix: Mat4, viewportWidth: number, viewportHeight: number): void {
     if (this._destroyed || this.instanceCount === 0) return;
 
     const gl = this.gl;
@@ -178,7 +178,7 @@ export class InstancedPointRenderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
+    gl.uniformMatrix4fv(this.uniforms.matrix, false, matrix);
     gl.uniform2f(this.uniforms.viewport, viewportWidth, viewportHeight);
 
     gl.bindVertexArray(this.vao);

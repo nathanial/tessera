@@ -6,7 +6,7 @@ import { createProgram } from "../shaders/compile";
 import { fillVertexShader, fillFragmentShader } from "../shaders/fill";
 import { DynamicBuffer } from "./DynamicBuffer";
 import type { Color } from "./DrawState";
-import type { Mat3 } from "../math/mat3";
+import type { Mat4 } from "../math/mat4";
 
 // WebGL constants
 const GL_FLOAT = 0x1406;
@@ -108,7 +108,7 @@ export class FillRenderer {
   }
 
   /** Render all batches. */
-  render(matrix: Mat3): void {
+  render(matrix: Mat4): void {
     if (this.batches.length === 0) return;
 
     const gl = this.gl;
@@ -118,7 +118,7 @@ export class FillRenderer {
     this.indices.upload();
 
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.matrixUniform, false, matrix);
+    gl.uniformMatrix4fv(this.matrixUniform, false, matrix);
 
     // Bind VAO and buffers
     gl.bindVertexArray(this.vao);

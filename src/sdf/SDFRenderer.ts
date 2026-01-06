@@ -11,7 +11,7 @@ import { createAtlasTexture, type FontAtlas, type IconAtlas } from "./AtlasManag
 import { TextGeometryBuilder } from "./TextGeometryBuilder";
 import { IconGeometryBuilder } from "./IconGeometryBuilder";
 import type { FontAtlasMetadata, IconAtlasMetadata, TextStyle, IconStyle } from "./types";
-import type { Mat3 } from "../math/mat3";
+import type { Mat4 } from "../math/mat4";
 
 /**
  * SDF text and icon renderer.
@@ -137,7 +137,7 @@ export class SDFRenderer {
   /**
    * Render all text and icons.
    */
-  render(matrix: Mat3, viewportWidth: number, viewportHeight: number): void {
+  render(matrix: Mat4, viewportWidth: number, viewportHeight: number): void {
     if (this._destroyed) return;
 
     // Rebuild geometry if dirty
@@ -158,7 +158,7 @@ export class SDFRenderer {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
+    gl.uniformMatrix4fv(this.uniforms.matrix, false, matrix);
     gl.uniform1f(this.uniforms.viewportWidth, viewportWidth);
     gl.uniform1f(this.uniforms.viewportHeight, viewportHeight);
     gl.activeTexture(gl.TEXTURE0);

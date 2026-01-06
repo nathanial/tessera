@@ -6,7 +6,7 @@ import { createProgram } from "../shaders/compile";
 import { strokeVertexShader, strokeFragmentShader } from "../shaders/stroke";
 import { DynamicBuffer } from "./DynamicBuffer";
 import type { Color } from "./DrawState";
-import type { Mat3 } from "../math/mat3";
+import type { Mat4 } from "../math/mat4";
 
 // WebGL constants
 const GL_FLOAT = 0x1406;
@@ -132,7 +132,7 @@ export class StrokeRenderer {
   }
 
   /** Render all batches. */
-  render(matrix: Mat3, viewportWidth: number, viewportHeight: number): void {
+  render(matrix: Mat4, viewportWidth: number, viewportHeight: number): void {
     if (this.batches.length === 0) return;
 
     const gl = this.gl;
@@ -142,7 +142,7 @@ export class StrokeRenderer {
     this.indices.upload();
 
     gl.useProgram(this.program);
-    gl.uniformMatrix3fv(this.matrixUniform, false, matrix);
+    gl.uniformMatrix4fv(this.matrixUniform, false, matrix);
     gl.uniform2f(this.viewportUniform, viewportWidth, viewportHeight);
 
     // Bind VAO and buffers

@@ -13,7 +13,7 @@ import { setBlendMode, type BlendMode } from "../style/index";
 import { BatchGroup } from "./BatchGroup";
 import { batchKeyToString, compareBatchKeys } from "./BatchKey";
 import type { BatchableFeature } from "./types";
-import type { Mat3 } from "../math/mat3";
+import type { Mat4 } from "../math/mat4";
 
 /**
  * Batched feature renderer for high-performance rendering.
@@ -126,7 +126,7 @@ export class BatchRenderer {
    * @param viewportWidth - Viewport width in pixels
    * @param viewportHeight - Viewport height in pixels
    */
-  render(matrix: Mat3, viewportWidth: number, viewportHeight: number): void {
+  render(matrix: Mat4, viewportWidth: number, viewportHeight: number): void {
     if (this._destroyed || this.sortedBatches.length === 0) return;
 
     const gl = this.gl;
@@ -149,10 +149,10 @@ export class BatchRenderer {
 
         if (currentProgram === "fill") {
           gl.useProgram(this.fillProgram);
-          gl.uniformMatrix3fv(this.fillUniforms.matrix, false, matrix);
+          gl.uniformMatrix4fv(this.fillUniforms.matrix, false, matrix);
         } else {
           gl.useProgram(this.strokeProgram);
-          gl.uniformMatrix3fv(this.strokeUniforms.matrix, false, matrix);
+          gl.uniformMatrix4fv(this.strokeUniforms.matrix, false, matrix);
           gl.uniform2f(
             this.strokeUniforms.viewport,
             viewportWidth,
