@@ -8,7 +8,7 @@
 import { DrawContext } from "../immediate/DrawContext";
 import { SDFRenderer } from "../sdf/SDFRenderer";
 import { TextLayout } from "../sdf/TextLayout";
-import { projection, type Mat3 } from "../math/mat3";
+import { ortho, type Mat4 } from "../math/mat4";
 import { WidgetState } from "./WidgetState";
 import { InputLayer } from "./InputLayer";
 import {
@@ -31,7 +31,7 @@ export interface ViewBounds {
 export interface FrameContext {
   viewportWidth: number;
   viewportHeight: number;
-  worldMatrix: Mat3;
+  worldMatrix: Mat4;
   bounds: ViewBounds;
 }
 
@@ -80,11 +80,11 @@ export class UIContext {
   // Frame state
   private inFrame: boolean = false;
   private frame: FrameContext | null = null;
-  private screenMatrix: Mat3 | null = null;
+  private screenMatrix: Mat4 | null = null;
 
   // Coordinate space
   private coordinateStack: CoordinateMode[] = [];
-  private currentMatrix: Mat3 | null = null;
+  private currentMatrix: Mat4 | null = null;
   private isDrawing: boolean = false;
 
   // Hover tracking
@@ -117,8 +117,8 @@ export class UIContext {
     this.inFrame = true;
     this.uiHovered = false;
 
-    // Create screen-space projection matrix
-    this.screenMatrix = projection(context.viewportWidth, context.viewportHeight);
+    // Create screen-space projection matrix (2D orthographic)
+    this.screenMatrix = ortho(0, context.viewportWidth, context.viewportHeight, 0, -1, 1);
 
     // Reset coordinate space to screen by default
     this.coordinateStack = ["screen"];
