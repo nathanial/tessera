@@ -16,12 +16,14 @@ in vec3 a_position;
 in vec3 a_normal;
 in vec2 a_uv;
 in float a_skirt;
+in vec2 a_tessera;
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform vec3 u_lightDir;
 uniform float u_lightMix;
 out float v_light;
 out vec2 v_uv;
+out vec2 v_tessera;
 void main() {
   vec3 normal = normalize(mat3(u_model) * a_normal);
   float diff = max(dot(normal, normalize(-u_lightDir)), 0.0);
@@ -30,6 +32,7 @@ void main() {
   float skirtLight = max(lit, ${SKIRT_LIGHT_MIN});
   v_light = mix(lit, skirtLight, a_skirt);
   v_uv = a_uv;
+  v_tessera = a_tessera;
   gl_Position = u_mvp * vec4(a_position, 1.0);
 }
 `;
@@ -38,11 +41,26 @@ const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in float v_light;
 in vec2 v_uv;
+in vec2 v_tessera;
 uniform sampler2D u_texture;
 uniform float u_textureMix;
 uniform vec3 u_color;
+uniform int u_clipCount;
+uniform vec4 u_clipRect0;
+uniform vec4 u_clipRect1;
 out vec4 fragColor;
 void main() {
+  if (u_clipCount > 0) {
+    bool inside = v_tessera.x >= u_clipRect0.x && v_tessera.x <= u_clipRect0.z &&
+      v_tessera.y >= u_clipRect0.y && v_tessera.y <= u_clipRect0.w;
+    if (u_clipCount > 1) {
+      inside = inside || (v_tessera.x >= u_clipRect1.x && v_tessera.x <= u_clipRect1.z &&
+        v_tessera.y >= u_clipRect1.y && v_tessera.y <= u_clipRect1.w);
+    }
+    if (inside) {
+      discard;
+    }
+  }
   vec3 texColor = texture(u_texture, v_uv).rgb;
   texColor = pow(texColor, vec3(1.0 / 1.6));
   texColor = clamp(texColor * 1.2, 0.0, 1.0);
@@ -106,6 +124,13 @@ const FOV = Math.PI / 3.5;
 const RASTER_ZOOM_OFFSET = 0;
 const MAX_RASTER_TILES = 64;
 const LIGHT_DIR: [number, number, number] = [0.1, 0.2, -1.4];
+const GLOBAL_TERRAIN_ZOOM = 3;
+const WORLD_BOUNDS: LonLatBounds = {
+  west: -180,
+  east: 180,
+  south: -85.0511,
+  north: 85.0511,
+};
 const AIRCRAFT_BASE: Array<[number, number]> = [
   [0, 1],
   [-0.5, -0.8],
@@ -135,6 +160,8 @@ interface TerrainMesh {
   tesseraCoords: Float32Array;
   skirtMask: Float32Array;
   radius: number;
+  halfWidth: number;
+  halfHeight: number;
   reference: TerrainReference;
   offset: [number, number, number];
   scale: number;
@@ -731,6 +758,25 @@ function computeAircraftSize(
   };
 }
 
+function computeClipRects(bounds: { left: number; right: number; top: number; bottom: number }): Array<[number, number, number, number]> {
+  const width = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  if (width >= 1 || height >= 1) return [];
+  const wrap01 = (value: number) => ((value % 1) + 1) % 1;
+  const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+  const top = clamp01(bounds.top);
+  const bottom = clamp01(bounds.bottom);
+  const left = bounds.left;
+  const right = bounds.right;
+  if (left <= right) {
+    return [[wrap01(left), top, wrap01(right), bottom]];
+  }
+  return [
+    [0, top, wrap01(right), bottom],
+    [wrap01(left), top, 1, bottom],
+  ];
+}
+
 function computeNormals(positions: Float32Array, indices: Uint32Array): Float32Array {
   const normals = new Float32Array(positions.length);
 
@@ -809,7 +855,9 @@ async function loadTerrainMesh(
   lon: number,
   zoom: number,
   viewBounds?: LonLatBounds,
-  layerOverride?: TerrainLayer & { baseUrl: string; accessToken: string }
+  layerOverride?: TerrainLayer & { baseUrl: string; accessToken: string },
+  referenceOverride?: { lat: number; lon: number },
+  originOffset?: [number, number, number]
 ): Promise<TerrainMesh> {
   const layer = layerOverride ?? await fetchIonLayer(token);
   const scheme = layer.scheme ?? "tms";
@@ -817,11 +865,11 @@ async function loadTerrainMesh(
 
   const { xTiles, yTiles } = tileCounts(projection, zoom);
   const { x: centerTileX, y: centerTileY } = lonLatToTileXY(lon, lat, zoom, projection, scheme);
-  const centerLon = lon;
-  const centerLat = lat;
-  const centerECEF = lonLatHeightToECEF(centerLon, centerLat, 0);
-  const refLon = (centerLon * Math.PI) / 180;
-  const refLat = (centerLat * Math.PI) / 180;
+  const referenceLon = referenceOverride?.lon ?? lon;
+  const referenceLat = referenceOverride?.lat ?? lat;
+  const centerECEF = lonLatHeightToECEF(referenceLon, referenceLat, 0);
+  const refLon = (referenceLon * Math.PI) / 180;
+  const refLat = (referenceLat * Math.PI) / 180;
 
   const tileCoords: { x: number; y: number }[] = [];
   if (viewBounds) {
@@ -1097,11 +1145,14 @@ async function loadTerrainMesh(
   const meshCenterX = (minX + maxX) / 2;
   const meshCenterY = (minY + maxY) / 2;
   const meshCenterZ = (minZ + maxZ) / 2;
+  const halfWidth = (maxX - minX) / 2;
+  const halfHeight = (maxY - minY) / 2;
 
+  const usedOffset: [number, number, number] = originOffset ?? [meshCenterX, meshCenterY, meshCenterZ];
   for (let i = 0; i < positions.length; i += 3) {
-    positions[i] = (positions[i] ?? 0) - meshCenterX;
-    positions[i + 1] = (positions[i + 1] ?? 0) - meshCenterY;
-    positions[i + 2] = (positions[i + 2] ?? 0) - meshCenterZ;
+    positions[i] = (positions[i] ?? 0) - usedOffset[0];
+    positions[i + 1] = (positions[i + 1] ?? 0) - usedOffset[1];
+    positions[i + 2] = (positions[i + 2] ?? 0) - usedOffset[2];
   }
 
   let radius = 0;
@@ -1122,14 +1173,14 @@ async function loadTerrainMesh(
     }
   }
 
-  const reference: TerrainReference = {
-    lon: centerLon,
-    lat: centerLat,
+  const terrainReference: TerrainReference = {
+    lon: referenceLon,
+    lat: referenceLat,
     lonRad: refLon,
     latRad: refLat,
     ecef: [centerECEF[0], centerECEF[1], centerECEF[2]],
   };
-  const offset: [number, number, number] = [meshCenterX, meshCenterY, meshCenterZ];
+  const offset: [number, number, number] = usedOffset;
 
   return {
     positions,
@@ -1138,7 +1189,9 @@ async function loadTerrainMesh(
     tesseraCoords,
     skirtMask,
     radius,
-    reference,
+    halfWidth,
+    halfHeight,
+    reference: terrainReference,
     offset,
     scale,
   };
@@ -1259,6 +1312,7 @@ export function startTerrainPreview(
     throw new Error("WebGL2 not supported for terrain preview");
   }
 
+  const terrainHeader = document.getElementById("terrain-panel-header");
   const labelCanvas = document.getElementById("terrain-labels") as HTMLCanvasElement | null;
   const labelCtx = labelCanvas?.getContext("2d") ?? null;
   const labelPlacer = new LabelPlacer({
@@ -1286,10 +1340,14 @@ export function startTerrainPreview(
   const normalLoc = gl.getAttribLocation(program, "a_normal");
   const uvLoc = gl.getAttribLocation(program, "a_uv");
   const skirtLoc = gl.getAttribLocation(program, "a_skirt");
+  const tesseraLoc = gl.getAttribLocation(program, "a_tessera");
   const mvpLoc = gl.getUniformLocation(program, "u_mvp");
   const modelLoc = gl.getUniformLocation(program, "u_model");
   const lightLoc = gl.getUniformLocation(program, "u_lightDir");
   const lightMixLoc = gl.getUniformLocation(program, "u_lightMix");
+  const clipCountLoc = gl.getUniformLocation(program, "u_clipCount");
+  const clipRect0Loc = gl.getUniformLocation(program, "u_clipRect0");
+  const clipRect1Loc = gl.getUniformLocation(program, "u_clipRect1");
   const colorLoc = gl.getUniformLocation(program, "u_color");
   const textureLoc = gl.getUniformLocation(program, "u_texture");
   const textureMixLoc = gl.getUniformLocation(program, "u_textureMix");
@@ -1309,20 +1367,35 @@ export function startTerrainPreview(
   const nbo = gl.createBuffer();
   const uvbo = gl.createBuffer();
   const skbo = gl.createBuffer();
+  const tbo = gl.createBuffer();
   const fillIbo = gl.createBuffer();
   const fallbackTexture = gl.createTexture();
+  const globalVao = gl.createVertexArray();
+  const globalVbo = gl.createBuffer();
+  const globalNbo = gl.createBuffer();
+  const globalUvbo = gl.createBuffer();
+  const globalSkbo = gl.createBuffer();
+  const globalTbo = gl.createBuffer();
+  const globalIbo = gl.createBuffer();
   const aircraftVao = gl.createVertexArray();
   const aircraftShapeBuffer = gl.createBuffer();
   const aircraftNormalBuffer = gl.createBuffer();
   const aircraftInstanceBuffer = gl.createBuffer();
   const aircraftInstanceData = new Float32Array(AIRCRAFT_MAX_INSTANCES * AIRCRAFT_INSTANCE_STRIDE);
 
-  let indexCount = 0;
-  let indexType: number = gl.UNSIGNED_SHORT;
-  let meshRadius = 1;
-  let meshReady = false;
-  let atlas: RasterAtlas | null = null;
-  let textureReady = false;
+  let detailIndexCount = 0;
+  let detailIndexType: number = gl.UNSIGNED_SHORT;
+  let detailMeshRadius = 1;
+  let detailMeshHalfWidth = 0;
+  let detailMeshHalfHeight = 0;
+  let detailMeshReady = false;
+  let detailAtlas: RasterAtlas | null = null;
+  let detailTextureReady = false;
+  let globalIndexCount = 0;
+  let globalIndexType: number = gl.UNSIGNED_SHORT;
+  let globalMeshReady = false;
+  let globalAtlas: RasterAtlas | null = null;
+  let globalTextureReady = false;
   let animationId: number | null = null;
   let azimuth = Math.PI;
   let elevation = 0.6;
@@ -1340,6 +1413,8 @@ export function startTerrainPreview(
   let currentView: TerrainView | null = null;
   let viewDebounceId: number | null = null;
   let loadId = 0;
+  let globalLoadId = 0;
+  let userAdjustedCamera = false;
   let aircraftList: Aircraft[] = [];
   let meshReference: TerrainReference | null = null;
   let meshOffset: [number, number, number] = [0, 0, 0];
@@ -1433,16 +1508,26 @@ export function startTerrainPreview(
   };
 
   const applyMesh = (mesh: TerrainMesh, tileZoom: number) => {
-    indexCount = mesh.indices.length;
-    meshRadius = Math.max(mesh.radius, 0.001);
+    detailIndexCount = mesh.indices.length;
+    detailMeshRadius = Math.max(mesh.radius, 0.001);
+    detailMeshHalfWidth = mesh.halfWidth;
+    detailMeshHalfHeight = mesh.halfHeight;
     meshReference = mesh.reference;
     meshOffset = mesh.offset;
     meshScale = mesh.scale;
-    distance = meshRadius * 1.8;
-    minDistance = meshRadius * 0.25;
-    maxDistance = meshRadius * 10;
+    minDistance = detailMeshRadius * 0.25;
+    maxDistance = detailMeshRadius * 10;
+    if (!detailMeshReady || !userAdjustedCamera) {
+      const aspect = canvas.width > 0 ? canvas.width / Math.max(1, canvas.height) : 1;
+      const tanHalfFov = Math.tan(FOV / 2);
+      const fitHeight = detailMeshHalfHeight / Math.max(1e-6, tanHalfFov);
+      const fitWidth = detailMeshHalfWidth / Math.max(1e-6, tanHalfFov * aspect);
+      distance = Math.max(fitHeight, fitWidth) * 1.08;
+    } else {
+      distance = clamp(distance, minDistance, maxDistance);
+    }
     const needsUint32 = mesh.positions.length / 3 > 65535;
-    indexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+    detailIndexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     const indexData = needsUint32 ? mesh.indices : new Uint16Array(mesh.indices);
 
     gl.bindVertexArray(vao);
@@ -1468,35 +1553,123 @@ export function startTerrainPreview(
     gl.enableVertexAttribArray(skirtLoc);
     gl.vertexAttribPointer(skirtLoc, 1, gl.FLOAT, false, 0, 0);
 
+    gl.bindBuffer(gl.ARRAY_BUFFER, tbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.tesseraCoords, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(tesseraLoc);
+    gl.vertexAttribPointer(tesseraLoc, 2, gl.FLOAT, false, 0, 0);
+
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fillIbo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
 
     gl.bindVertexArray(null);
-    meshReady = true;
+    detailMeshReady = true;
 
     void (async () => {
       const rasterZoom = Math.max(0, tileZoom + RASTER_ZOOM_OFFSET);
       const atlasResult = await buildRasterAtlas(gl, mesh.tesseraCoords, rasterZoom);
       if (!atlasResult) return;
-      if (atlas?.texture) gl.deleteTexture(atlas.texture);
-      atlas = atlasResult;
+      if (detailAtlas?.texture) gl.deleteTexture(detailAtlas.texture);
+      detailAtlas = atlasResult;
       const uvs = computeAtlasUVs(mesh.tesseraCoords, atlasResult);
       gl.bindBuffer(gl.ARRAY_BUFFER, uvbo);
       gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
-      textureReady = true;
+      detailTextureReady = true;
     })();
   };
 
-  const load = async (centerLat: number, centerLon: number, tileZoom: number, bounds?: LonLatBounds) => {
+  const applyGlobalMesh = (mesh: TerrainMesh, tileZoom: number) => {
+    globalIndexCount = mesh.indices.length;
+    globalMeshReady = false;
+    const needsUint32 = mesh.positions.length / 3 > 65535;
+    globalIndexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+    const indexData = needsUint32 ? mesh.indices : new Uint16Array(mesh.indices);
+
+    gl.bindVertexArray(globalVao);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, globalVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.positions, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(positionLoc);
+    gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, globalNbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.normals, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(normalLoc);
+    gl.vertexAttribPointer(normalLoc, 3, gl.FLOAT, false, 0, 0);
+
+    const initialUvs = new Float32Array((mesh.positions.length / 3) * 2);
+    gl.bindBuffer(gl.ARRAY_BUFFER, globalUvbo);
+    gl.bufferData(gl.ARRAY_BUFFER, initialUvs, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(uvLoc);
+    gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, globalSkbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.skirtMask, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(skirtLoc);
+    gl.vertexAttribPointer(skirtLoc, 1, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, globalTbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.tesseraCoords, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(tesseraLoc);
+    gl.vertexAttribPointer(tesseraLoc, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, globalIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
+
+    gl.bindVertexArray(null);
+    globalMeshReady = true;
+
+    void (async () => {
+      const rasterZoom = Math.max(0, tileZoom + RASTER_ZOOM_OFFSET);
+      const atlasResult = await buildRasterAtlas(gl, mesh.tesseraCoords, rasterZoom);
+      if (!atlasResult) return;
+      if (globalAtlas?.texture) gl.deleteTexture(globalAtlas.texture);
+      globalAtlas = atlasResult;
+      const uvs = computeAtlasUVs(mesh.tesseraCoords, atlasResult);
+      gl.bindBuffer(gl.ARRAY_BUFFER, globalUvbo);
+      gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+      globalTextureReady = true;
+    })();
+  };
+
+  const loadDetail = async (
+    centerLat: number,
+    centerLon: number,
+    tileZoom: number,
+    bounds?: LonLatBounds
+  ): Promise<TerrainMesh | null> => {
     const currentLoadId = ++loadId;
     try {
       const layer = await getLayer();
       const mesh = await loadTerrainMesh(token, centerLat, centerLon, tileZoom, bounds, layer);
-      if (currentLoadId !== loadId) return;
-      textureReady = false;
+      if (currentLoadId !== loadId) return null;
+      detailTextureReady = false;
       applyMesh(mesh, tileZoom);
+      return mesh;
     } catch {
       // Keep prior mesh if new load fails.
+    }
+    return null;
+  };
+
+  const loadGlobal = async (centerLat: number, centerLon: number, originOffset: [number, number, number]) => {
+    const currentLoadId = ++globalLoadId;
+    try {
+      const layer = await getLayer();
+      const mesh = await loadTerrainMesh(
+        token,
+        centerLat,
+        centerLon,
+        GLOBAL_TERRAIN_ZOOM,
+        WORLD_BOUNDS,
+        layer,
+        undefined,
+        originOffset
+      );
+      if (currentLoadId !== globalLoadId) return;
+      globalTextureReady = false;
+      applyGlobalMesh(mesh, GLOBAL_TERRAIN_ZOOM);
+    } catch {
+      // Keep prior global mesh if new load fails.
     }
   };
 
@@ -1528,7 +1701,20 @@ export function startTerrainPreview(
       south,
       north,
     };
-    await load(center.lat, center.lon, tileZoom, lonLatBounds);
+    const layer = await getLayer();
+    const scheme = layer.scheme ?? "tms";
+    const projection = layer.projection ?? "EPSG:4326";
+    const range = computeTileRangeFromBounds(lonLatBounds, tileZoom, projection, scheme);
+    const tilesWide = Math.max(1, range.maxX - range.minX + 1);
+    const tilesHigh = Math.max(1, range.maxY - range.minY + 1);
+    if (terrainHeader) {
+      const total = tilesWide * tilesHigh;
+      terrainHeader.textContent = `Terrain Preview · z${tileZoom} · ${tilesWide}x${tilesHigh} (${total})`;
+    }
+    const detailMesh = await loadDetail(center.lat, center.lon, tileZoom, lonLatBounds);
+    if (detailMesh) {
+      await loadGlobal(center.lat, center.lon, detailMesh.offset);
+    }
   };
 
   const setView = (view: TerrainView) => {
@@ -1559,7 +1745,12 @@ export function startTerrainPreview(
     aircraftList = aircraft;
   };
 
-  void load(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
+  void (async () => {
+    const detailMesh = await loadDetail(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
+    if (detailMesh) {
+      await loadGlobal(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, detailMesh.offset);
+    }
+  })();
 
   gl.enable(gl.DEPTH_TEST);
   gl.disable(gl.CULL_FACE);
@@ -1598,10 +1789,12 @@ export function startTerrainPreview(
     lastY = event.clientY;
 
     if (dragMode === "orbit") {
+      userAdjustedCamera = true;
       azimuth += dx * ORBIT_SPEED;
       elevation = clamp(elevation + dy * ORBIT_SPEED, MIN_ELEVATION, MAX_ELEVATION);
       return;
     }
+    userAdjustedCamera = true;
 
     const eye = getEye();
     const dir: [number, number, number] = [
@@ -1641,6 +1834,7 @@ export function startTerrainPreview(
   const onWheel = (event: WheelEvent) => {
     const zoom = Math.exp(event.deltaY * 0.001);
     distance = clamp(distance * zoom, minDistance, maxDistance);
+    userAdjustedCamera = true;
   };
 
   const onContextMenu = (event: MouseEvent) => {
@@ -1662,14 +1856,16 @@ export function startTerrainPreview(
       labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
     }
 
-    if (meshReady) {
+    if (detailMeshReady) {
       const aspect = canvas.width / canvas.height;
       const near = Math.max(0.01, distance * 0.02);
-      const far = Math.max(distance * 10, meshRadius * 8);
+      const far = Math.max(distance * 10, detailMeshRadius * 8);
       const projection = mat4Perspective(FOV, aspect, near, far);
       const view = mat4LookAt(getEye(), target, [0, 0, 1]);
       const model = mat4Identity();
       const mvp = mat4Multiply(projection, mat4Multiply(view, model));
+      const clipRects = currentView ? computeClipRects(currentView.bounds) : [];
+      const clipCount = Math.min(2, clipRects.length);
 
       gl.useProgram(program);
       gl.uniformMatrix4fv(mvpLoc, false, mvp);
@@ -1677,16 +1873,43 @@ export function startTerrainPreview(
       gl.uniform3f(lightLoc, LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
       gl.uniform1f(lightMixLoc, 1);
       gl.uniform3f(colorLoc, 0.3, 0.7, 0.55);
-      gl.uniform1f(textureMixLoc, textureReady ? 1 : 0);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, textureReady ? atlas?.texture ?? fallbackTexture : fallbackTexture);
       gl.uniform1i(textureLoc, 0);
 
-      gl.bindVertexArray(vao);
       gl.enable(gl.POLYGON_OFFSET_FILL);
       gl.polygonOffset(1, 1);
+
+      if (globalMeshReady) {
+        gl.uniform1i(clipCountLoc, clipCount);
+        if (clipCount > 0) {
+          const rect0 = clipRects[0]!;
+          gl.uniform4f(clipRect0Loc, rect0[0], rect0[1], rect0[2], rect0[3]);
+          if (clipCount > 1) {
+            const rect1 = clipRects[1]!;
+            gl.uniform4f(clipRect1Loc, rect1[0], rect1[1], rect1[2], rect1[3]);
+          } else {
+            gl.uniform4f(clipRect1Loc, 0, 0, 0, 0);
+          }
+        } else {
+          gl.uniform4f(clipRect0Loc, 0, 0, 0, 0);
+          gl.uniform4f(clipRect1Loc, 0, 0, 0, 0);
+        }
+        gl.uniform1f(textureMixLoc, globalTextureReady ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, globalTextureReady ? globalAtlas?.texture ?? fallbackTexture : fallbackTexture);
+        gl.bindVertexArray(globalVao);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, globalIbo);
+        gl.drawElements(gl.TRIANGLES, globalIndexCount, globalIndexType, 0);
+      }
+
+      gl.uniform1i(clipCountLoc, 0);
+      gl.uniform1f(textureMixLoc, detailTextureReady ? 1 : 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, detailTextureReady ? detailAtlas?.texture ?? fallbackTexture : fallbackTexture);
+
+      gl.bindVertexArray(vao);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fillIbo);
-      gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
+      gl.drawElements(gl.TRIANGLES, detailIndexCount, detailIndexType, 0);
+
       gl.disable(gl.POLYGON_OFFSET_FILL);
 
       gl.bindVertexArray(null);
@@ -1702,7 +1925,7 @@ export function startTerrainPreview(
         currentView &&
         aircraftList.length > 0
       ) {
-        const sizes = computeAircraftSize(currentView, meshReference, meshScale, meshOffset, meshRadius);
+        const sizes = computeAircraftSize(currentView, meshReference, meshScale, meshOffset, detailMeshRadius);
         const bounds = currentView.bounds;
         const worldSize = sizes.world;
         const enuSize = sizes.enu;
@@ -1889,13 +2112,22 @@ export function startTerrainPreview(
       gl.deleteBuffer(nbo);
       gl.deleteBuffer(uvbo);
       gl.deleteBuffer(skbo);
+      gl.deleteBuffer(tbo);
       gl.deleteBuffer(fillIbo);
       if (vao) gl.deleteVertexArray(vao);
+      gl.deleteBuffer(globalVbo);
+      gl.deleteBuffer(globalNbo);
+      gl.deleteBuffer(globalUvbo);
+      gl.deleteBuffer(globalSkbo);
+      gl.deleteBuffer(globalTbo);
+      gl.deleteBuffer(globalIbo);
+      if (globalVao) gl.deleteVertexArray(globalVao);
       if (aircraftVao) gl.deleteVertexArray(aircraftVao);
       gl.deleteBuffer(aircraftShapeBuffer);
       gl.deleteBuffer(aircraftNormalBuffer);
       gl.deleteBuffer(aircraftInstanceBuffer);
-      if (atlas?.texture) gl.deleteTexture(atlas.texture);
+      if (detailAtlas?.texture) gl.deleteTexture(detailAtlas.texture);
+      if (globalAtlas?.texture) gl.deleteTexture(globalAtlas.texture);
       if (fallbackTexture) gl.deleteTexture(fallbackTexture);
       gl.deleteProgram(program);
       gl.deleteProgram(aircraftProgram);
