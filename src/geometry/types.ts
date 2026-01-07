@@ -27,15 +27,10 @@ export interface ExtrudedLine {
 /** Cap style for line ends */
 export type CapStyle = "butt" | "square" | "round";
 
-/** Join style for line vertices */
-export type JoinStyle = "miter" | "bevel" | "round";
-
 /** Line extrusion options */
 export interface ExtrudeOptions {
   /** Cap style for line ends (default: butt) */
   cap?: CapStyle;
-  /** Join style for vertices (default: miter) */
-  join?: JoinStyle;
   /** Miter limit before fallback to bevel (default: 10) */
   miterLimit?: number;
 }

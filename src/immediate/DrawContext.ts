@@ -5,7 +5,7 @@
  * All drawing commands are batched and flushed to the GPU at end().
  */
 
-import { DrawState, type Color, type LineCap, type LineJoin } from "./DrawState";
+import { DrawState, type Color, type LineCap } from "./DrawState";
 import { PathBuilder } from "./PathBuilder";
 import { TemplateManager } from "./TemplateManager";
 import { FillRenderer } from "./FillRenderer";
@@ -86,14 +86,6 @@ export class DrawContext implements PathApi {
 
   set lineCap(cap: LineCap) {
     this.state.lineCap = cap;
-  }
-
-  get lineJoin(): LineJoin {
-    return this.state.lineJoin;
-  }
-
-  set lineJoin(join: LineJoin) {
-    this.state.lineJoin = join;
   }
 
   get miterLimit(): number {

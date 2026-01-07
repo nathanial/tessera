@@ -31,14 +31,7 @@ Date: 2026-01-07
 
 ## Findings: cleanup/refactor/duplication
 
-### 1) Unused or partially-implemented API surface
-
-- `ExtrudeOptions.join` and `JoinStyle` in `src/geometry/types.ts` are defined but not used in `src/geometry/extrude.ts`.
-- `DrawState.lineJoin` is tracked but never influences stroke geometry (`PathBuilder.extrude()` only supports miter joins).
-
-Recommendation: either implement join styles or remove the unused options to avoid misleading API.
-
-### 2) Dev/demo code separation
+### 1) Dev/demo code separation
 
 - `dev/` contains a large amount of prototype logic and utilities (selection, labels, sensor cones, spatial grids, etc.). Decide whether these are:
   - part of the library (move into `src/`), or

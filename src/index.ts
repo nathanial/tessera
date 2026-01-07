@@ -49,7 +49,6 @@ export type {
   DrawContextOptions,
   Color as ImmediateColor,
   LineCap,
-  LineJoin,
   DrawStateValues,
   DynamicBufferType,
   Coord,

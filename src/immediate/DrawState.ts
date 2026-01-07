@@ -8,14 +8,12 @@
 import type { Color } from "../types/color";
 export type { Color };
 export type LineCap = "butt" | "round" | "square";
-export type LineJoin = "miter" | "round" | "bevel";
 
 export interface DrawStateValues {
   fillStyle: Color;
   strokeStyle: Color;
   lineWidth: number;
   lineCap: LineCap;
-  lineJoin: LineJoin;
   miterLimit: number;
   globalAlpha: number;
 }
@@ -25,7 +23,6 @@ const DEFAULT_STATE: DrawStateValues = {
   strokeStyle: [0, 0, 0, 1],
   lineWidth: 1,
   lineCap: "butt",
-  lineJoin: "miter",
   miterLimit: 10,
   globalAlpha: 1,
 };
@@ -74,15 +71,6 @@ export class DrawState {
     this.current.lineCap = cap;
   }
 
-  // Line join
-  get lineJoin(): LineJoin {
-    return this.current.lineJoin;
-  }
-
-  set lineJoin(join: LineJoin) {
-    this.current.lineJoin = join;
-  }
-
   // Miter limit
   get miterLimit(): number {
     return this.current.miterLimit;
@@ -126,7 +114,6 @@ export class DrawState {
       strokeStyle: [...this.current.strokeStyle] as Color,
       lineWidth: this.current.lineWidth,
       lineCap: this.current.lineCap,
-      lineJoin: this.current.lineJoin,
       miterLimit: this.current.miterLimit,
       globalAlpha: this.current.globalAlpha,
     });
