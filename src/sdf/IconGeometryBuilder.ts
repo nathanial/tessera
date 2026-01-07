@@ -3,8 +3,9 @@
  * Builds geometry from icon instances for GPU rendering.
  */
 
-import { Geometry } from "../Geometry";
+import type { Geometry } from "../Geometry";
 import { DEFAULT_ICON_STYLE, type IconAtlasMetadata, type IconStyle } from "./types";
+import { appendQuad, buildQuadGeometry, type QuadCorner } from "./quad";
 
 /** Internal representation of an icon */
 export interface IconInstance {
@@ -109,44 +110,30 @@ export class IconGeometryBuilder {
       const v1 = (iconMeta.y + iconMeta.height) / metadata.atlasHeight;
 
       // Generate corners with rotation
-      const cornerData: [number, number, number, number][] = [
+      const cornerData: QuadCorner[] = [
         [-halfW, -halfH, u0, v0],
         [halfW, -halfH, u1, v0],
         [-halfW, halfH, u0, v1],
         [halfW, halfH, u1, v1],
       ];
 
-      // Get color components
-      const [r, g, b, a] = icon.style.color;
-
-      for (const [lx, ly, u, v] of cornerData) {
-        const rx = cos * lx - sin * ly + centerOffsetX;
-        const ry = sin * lx + cos * ly + centerOffsetY;
-        vertices.push(anchorX, anchorY, rx, ry, u, v, r, g, b, a);
-      }
-
-      const base = vertexCount;
-      indices.push(base, base + 1, base + 2);
-      indices.push(base + 1, base + 3, base + 2);
-      vertexCount += 4;
+      vertexCount = appendQuad(
+        vertices,
+        indices,
+        anchorX,
+        anchorY,
+        cornerData,
+        icon.style.color,
+        vertexCount,
+        cos,
+        sin,
+        centerOffsetX,
+        centerOffsetY
+      );
     }
 
     this.geometry?.destroy();
-    if (vertices.length > 0) {
-      this.geometry = new Geometry(this.gl, {
-        vertices: new Float32Array(vertices),
-        indices:
-          vertexCount > 65535 / 4
-            ? new Uint32Array(indices)
-            : new Uint16Array(indices),
-        attributes: [
-          { location: 0, size: 2, stride: 40, offset: 0 },  // anchor
-          { location: 1, size: 2, stride: 40, offset: 8 },  // offset
-          { location: 2, size: 2, stride: 40, offset: 16 }, // texCoord
-          { location: 3, size: 4, stride: 40, offset: 24 }, // color
-        ],
-      });
-    }
+    this.geometry = buildQuadGeometry(this.gl, vertices, indices, vertexCount);
 
     this.dirty = false;
   }

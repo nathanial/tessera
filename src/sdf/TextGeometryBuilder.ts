@@ -3,8 +3,9 @@
  * Builds geometry from text labels for GPU rendering.
  */
 
-import { Geometry } from "../Geometry";
+import type { Geometry } from "../Geometry";
 import { DEFAULT_TEXT_STYLE, type FontAtlasMetadata, type TextStyle } from "./types";
+import { appendQuad, buildQuadGeometry, type QuadCorner } from "./quad";
 
 /** Internal representation of a text label */
 export interface TextLabel {
@@ -133,47 +134,30 @@ export class TextGeometryBuilder {
         const v1 = (glyph.y + glyph.height) / metadata.atlasHeight;
 
         // Rotate each corner
-        const corners: [number, number, number, number][] = [
+        const corners: QuadCorner[] = [
           [lx0, ly0, u0, v0],
           [lx1, ly0, u1, v0],
           [lx0, ly1, u0, v1],
           [lx1, ly1, u1, v1],
         ];
-
-        // Get color components
-        const [r, g, b, a] = label.style.color;
-
-        for (const [lx, ly, u, v] of corners) {
-          const rx = cos * lx - sin * ly;
-          const ry = sin * lx + cos * ly;
-          vertices.push(anchorX, anchorY, rx, ry, u, v, r, g, b, a);
-        }
-
-        const base = vertexCount;
-        indices.push(base, base + 1, base + 2);
-        indices.push(base + 1, base + 3, base + 2);
-        vertexCount += 4;
+        vertexCount = appendQuad(
+          vertices,
+          indices,
+          anchorX,
+          anchorY,
+          corners,
+          label.style.color,
+          vertexCount,
+          cos,
+          sin
+        );
 
         pixelOffsetX += glyph.xAdvance * scale;
       }
     }
 
     this.geometry?.destroy();
-    if (vertices.length > 0) {
-      this.geometry = new Geometry(this.gl, {
-        vertices: new Float32Array(vertices),
-        indices:
-          vertexCount > 65535 / 4
-            ? new Uint32Array(indices)
-            : new Uint16Array(indices),
-        attributes: [
-          { location: 0, size: 2, stride: 40, offset: 0 },  // anchor
-          { location: 1, size: 2, stride: 40, offset: 8 },  // offset
-          { location: 2, size: 2, stride: 40, offset: 16 }, // texCoord
-          { location: 3, size: 4, stride: 40, offset: 24 }, // color
-        ],
-      });
-    }
+    this.geometry = buildQuadGeometry(this.gl, vertices, indices, vertexCount);
 
     this.dirty = false;
   }
