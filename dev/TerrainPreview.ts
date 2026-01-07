@@ -1,5 +1,8 @@
 import { TILE_SIZE } from "../src/constants";
 import { lonLatToTessera, tesseraToLonLat } from "../src/geo/projection";
+import type { Aircraft } from "./adsb";
+import { getAltitudeColor } from "./adsb";
+import { getWrappedX } from "./CoordinateUtils";
 
 const VERTEX_SHADER = `#version 300 es
 in vec3 a_position;
@@ -36,6 +39,37 @@ void main() {
 }
 `;
 
+const AIRCRAFT_VERTEX_SHADER = `#version 300 es
+in vec2 a_shape;
+in vec3 a_instancePos;
+in float a_heading;
+in float a_size;
+in vec3 a_color;
+uniform mat4 u_mvp;
+out vec3 v_color;
+void main() {
+  float angle = -a_heading;
+  float c = cos(angle);
+  float s = sin(angle);
+  vec2 rotated = vec2(
+    a_shape.x * c - a_shape.y * s,
+    a_shape.x * s + a_shape.y * c
+  ) * a_size;
+  vec3 world = a_instancePos + vec3(rotated, 0.0);
+  gl_Position = u_mvp * vec4(world, 1.0);
+  v_color = a_color;
+}
+`;
+
+const AIRCRAFT_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+in vec3 v_color;
+out vec4 fragColor;
+void main() {
+  fragColor = vec4(v_color, 0.95);
+}
+`;
+
 const WGS84_A = 6378137.0;
 const WGS84_E2 = 0.00669437999014;
 const QUANTIZED_MAX = 32767;
@@ -48,6 +82,21 @@ const MAX_ELEVATION = 1.2;
 const FOV = Math.PI / 3.5;
 const RASTER_ZOOM_OFFSET = 0;
 const MAX_RASTER_TILES = 64;
+const AIRCRAFT_SHAPE = new Float32Array([
+  0, 1,
+  -0.5, -0.8,
+  0, -0.4,
+  0, 1,
+  0, -0.4,
+  0.5, -0.8,
+]);
+const AIRCRAFT_VERTEX_COUNT = AIRCRAFT_SHAPE.length / 2;
+const AIRCRAFT_INSTANCE_STRIDE = 8;
+const AIRCRAFT_MAX_INSTANCES = 3000;
+const AIRCRAFT_SCREEN_SIZE = 15;
+const AIRCRAFT_FULL_SIZE_ZOOM = 8;
+const AIRCRAFT_MIN_SIZE = 3;
+const AIRCRAFT_ALTITUDE_OFFSET = 60;
 
 interface TerrainLayer {
   tiles: string[];
@@ -62,12 +111,17 @@ interface TerrainMesh {
   indices: Uint32Array;
   tesseraCoords: Float32Array;
   radius: number;
+  reference: TerrainReference;
+  offset: [number, number, number];
+  scale: number;
 }
 
 interface TerrainView {
   centerX: number;
   centerY: number;
   zoom: number;
+  viewportWidth: number;
+  viewportHeight: number;
   bounds: {
     left: number;
     right: number;
@@ -80,6 +134,14 @@ interface DecodedTile {
   positions: Float32Array<ArrayBuffer>;
   indices: Uint32Array<ArrayBuffer>;
   tesseraCoords: Float32Array<ArrayBuffer>;
+}
+
+interface TerrainReference {
+  lon: number;
+  lat: number;
+  lonRad: number;
+  latRad: number;
+  ecef: [number, number, number];
 }
 
 interface LonLatBounds {
@@ -111,9 +173,13 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
   return shader;
 }
 
-function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
-  const vs = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-  const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+function createProgramWithSource(
+  gl: WebGL2RenderingContext,
+  vertexSource: string,
+  fragmentSource: string
+): WebGLProgram {
+  const vs = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
   const program = gl.createProgram();
   if (!program) throw new Error("Failed to create program");
   gl.attachShader(program, vs);
@@ -127,6 +193,10 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
   gl.deleteShader(vs);
   gl.deleteShader(fs);
   return program;
+}
+
+function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
+  return createProgramWithSource(gl, VERTEX_SHADER, FRAGMENT_SHADER);
 }
 
 function appendAccessToken(url: string, token: string): string {
@@ -519,6 +589,73 @@ function ecefToEnu(
   return [east, north, up];
 }
 
+function projectTesseraToEnu(
+  x: number,
+  y: number,
+  heightMeters: number,
+  reference: TerrainReference,
+  scale: number,
+  offset: [number, number, number]
+): [number, number, number] {
+  const lonLat = tesseraToLonLat(x, y);
+  const [xEcef, yEcef, zEcef] = lonLatHeightToECEF(lonLat.lon, lonLat.lat, heightMeters);
+  const [east, north, up] = ecefToEnu(
+    xEcef,
+    yEcef,
+    zEcef,
+    reference.lonRad,
+    reference.latRad,
+    reference.ecef[0],
+    reference.ecef[1],
+    reference.ecef[2]
+  );
+  return [
+    east * scale - offset[0],
+    north * scale - offset[1],
+    up * scale - offset[2],
+  ];
+}
+
+function computeAircraftSize(
+  view: TerrainView,
+  reference: TerrainReference,
+  scale: number,
+  offset: [number, number, number],
+  meshRadius: number
+): { world: number; enu: number } {
+  const viewWidth = Math.max(1e-6, view.bounds.right - view.bounds.left);
+  const pixelsPerWorldUnit = view.viewportWidth / viewWidth;
+  let screenSize = AIRCRAFT_SCREEN_SIZE;
+  if (view.zoom < AIRCRAFT_FULL_SIZE_ZOOM) {
+    const t = (view.zoom - 4) / (AIRCRAFT_FULL_SIZE_ZOOM - 4);
+    screenSize = AIRCRAFT_MIN_SIZE + (AIRCRAFT_SCREEN_SIZE - AIRCRAFT_MIN_SIZE) * Math.max(0, t);
+  }
+  const aircraftWorld = screenSize / Math.max(1, pixelsPerWorldUnit);
+  const leftPos = projectTesseraToEnu(
+    view.centerX - viewWidth / 2,
+    view.centerY,
+    0,
+    reference,
+    scale,
+    offset
+  );
+  const rightPos = projectTesseraToEnu(
+    view.centerX + viewWidth / 2,
+    view.centerY,
+    0,
+    reference,
+    scale,
+    offset
+  );
+  const viewWidthEnu = Math.hypot(rightPos[0] - leftPos[0], rightPos[1] - leftPos[1]);
+  const scaleFactor = viewWidthEnu / viewWidth;
+  const size = aircraftWorld * scaleFactor;
+  return {
+    world: aircraftWorld,
+    enu: clamp(size, meshRadius * 0.002, meshRadius * 0.05),
+  };
+}
+
 function computeNormals(positions: Float32Array, indices: Uint32Array): Float32Array {
   const normals = new Float32Array(positions.length);
 
@@ -837,12 +974,24 @@ async function loadTerrainMesh(
 
   const normals = computeNormals(positions, indices);
 
+  const reference: TerrainReference = {
+    lon: centerLon,
+    lat: centerLat,
+    lonRad: refLon,
+    latRad: refLat,
+    ecef: [centerECEF[0], centerECEF[1], centerECEF[2]],
+  };
+  const offset: [number, number, number] = [meshCenterX, meshCenterY, meshCenterZ];
+
   return {
     positions,
     normals,
     indices,
     tesseraCoords,
     radius,
+    reference,
+    offset,
+    scale,
   };
 }
 
@@ -928,7 +1077,12 @@ function mat4RotateZ(angle: number): Float32Array {
 
 export function startTerrainPreview(
   canvas: HTMLCanvasElement
-): { stop: () => void; resize: () => void; setView: (view: TerrainView) => void } {
+): {
+  stop: () => void;
+  resize: () => void;
+  setView: (view: TerrainView) => void;
+  setAircraft: (aircraft: Aircraft[]) => void;
+} {
   const gl = canvas.getContext("webgl2", { antialias: true, alpha: true });
   if (!gl) {
     throw new Error("WebGL2 not supported for terrain preview");
@@ -952,6 +1106,14 @@ export function startTerrainPreview(
   const textureLoc = gl.getUniformLocation(program, "u_texture");
   const textureMixLoc = gl.getUniformLocation(program, "u_textureMix");
 
+  const aircraftProgram = createProgramWithSource(gl, AIRCRAFT_VERTEX_SHADER, AIRCRAFT_FRAGMENT_SHADER);
+  const aircraftShapeLoc = gl.getAttribLocation(aircraftProgram, "a_shape");
+  const aircraftPosLoc = gl.getAttribLocation(aircraftProgram, "a_instancePos");
+  const aircraftHeadingLoc = gl.getAttribLocation(aircraftProgram, "a_heading");
+  const aircraftSizeLoc = gl.getAttribLocation(aircraftProgram, "a_size");
+  const aircraftColorLoc = gl.getAttribLocation(aircraftProgram, "a_color");
+  const aircraftMvpLoc = gl.getUniformLocation(aircraftProgram, "u_mvp");
+
   const vao = gl.createVertexArray();
   const vbo = gl.createBuffer();
   const nbo = gl.createBuffer();
@@ -959,6 +1121,10 @@ export function startTerrainPreview(
   const fillIbo = gl.createBuffer();
   const wireIbo = gl.createBuffer();
   const fallbackTexture = gl.createTexture();
+  const aircraftVao = gl.createVertexArray();
+  const aircraftShapeBuffer = gl.createBuffer();
+  const aircraftInstanceBuffer = gl.createBuffer();
+  const aircraftInstanceData = new Float32Array(AIRCRAFT_MAX_INSTANCES * AIRCRAFT_INSTANCE_STRIDE);
 
   let indexCount = 0;
   let wireIndexCount = 0;
@@ -983,8 +1149,13 @@ export function startTerrainPreview(
   let terrainLayer: (TerrainLayer & { baseUrl: string; accessToken: string }) | null = null;
   let pendingView: TerrainView | null = null;
   let lastView: TerrainView | null = null;
+  let currentView: TerrainView | null = null;
   let viewDebounceId: number | null = null;
   let loadId = 0;
+  let aircraftList: Aircraft[] = [];
+  let meshReference: TerrainReference | null = null;
+  let meshOffset: [number, number, number] = [0, 0, 0];
+  let meshScale = 1;
 
   if (fallbackTexture) {
     gl.bindTexture(gl.TEXTURE_2D, fallbackTexture);
@@ -1003,6 +1174,46 @@ export function startTerrainPreview(
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  }
+
+  const aircraftReady = Boolean(aircraftVao && aircraftShapeBuffer && aircraftInstanceBuffer);
+  if (aircraftReady) {
+    gl.bindVertexArray(aircraftVao);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, aircraftShapeBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, AIRCRAFT_SHAPE, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(aircraftShapeLoc);
+    gl.vertexAttribPointer(aircraftShapeLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(aircraftShapeLoc, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, aircraftInstanceBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      aircraftInstanceData.byteLength,
+      gl.DYNAMIC_DRAW
+    );
+    const stride = AIRCRAFT_INSTANCE_STRIDE * 4;
+    let offset = 0;
+    gl.enableVertexAttribArray(aircraftPosLoc);
+    gl.vertexAttribPointer(aircraftPosLoc, 3, gl.FLOAT, false, stride, offset);
+    gl.vertexAttribDivisor(aircraftPosLoc, 1);
+    offset += 12;
+
+    gl.enableVertexAttribArray(aircraftHeadingLoc);
+    gl.vertexAttribPointer(aircraftHeadingLoc, 1, gl.FLOAT, false, stride, offset);
+    gl.vertexAttribDivisor(aircraftHeadingLoc, 1);
+    offset += 4;
+
+    gl.enableVertexAttribArray(aircraftSizeLoc);
+    gl.vertexAttribPointer(aircraftSizeLoc, 1, gl.FLOAT, false, stride, offset);
+    gl.vertexAttribDivisor(aircraftSizeLoc, 1);
+    offset += 4;
+
+    gl.enableVertexAttribArray(aircraftColorLoc);
+    gl.vertexAttribPointer(aircraftColorLoc, 3, gl.FLOAT, false, stride, offset);
+    gl.vertexAttribDivisor(aircraftColorLoc, 1);
+
+    gl.bindVertexArray(null);
   }
 
   const resize = () => {
@@ -1026,6 +1237,9 @@ export function startTerrainPreview(
   const applyMesh = (mesh: TerrainMesh, tileZoom: number) => {
     indexCount = mesh.indices.length;
     meshRadius = Math.max(mesh.radius, 0.001);
+    meshReference = mesh.reference;
+    meshOffset = mesh.offset;
+    meshScale = mesh.scale;
     distance = meshRadius * 1.8;
     minDistance = meshRadius * 0.25;
     maxDistance = meshRadius * 10;
@@ -1111,6 +1325,8 @@ export function startTerrainPreview(
       Math.abs(a.centerX - b.centerX) < epsilon &&
       Math.abs(a.centerY - b.centerY) < epsilon &&
       Math.abs(a.zoom - b.zoom) < epsilon &&
+      Math.abs(a.viewportWidth - b.viewportWidth) < epsilon &&
+      Math.abs(a.viewportHeight - b.viewportHeight) < epsilon &&
       Math.abs(a.bounds.left - b.bounds.left) < epsilon &&
       Math.abs(a.bounds.right - b.bounds.right) < epsilon &&
       Math.abs(a.bounds.top - b.bounds.top) < epsilon &&
@@ -1135,11 +1351,14 @@ export function startTerrainPreview(
   };
 
   const setView = (view: TerrainView) => {
+    currentView = view;
     if (lastView && viewsEqual(lastView, view)) return;
     lastView = {
       centerX: view.centerX,
       centerY: view.centerY,
       zoom: view.zoom,
+      viewportWidth: view.viewportWidth,
+      viewportHeight: view.viewportHeight,
       bounds: { ...view.bounds },
     };
     pendingView = lastView;
@@ -1153,6 +1372,10 @@ export function startTerrainPreview(
       pendingView = null;
       void applyView(next);
     }, 150);
+  };
+
+  const setAircraft = (aircraft: Aircraft[]) => {
+    aircraftList = aircraft;
   };
 
   void load(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
@@ -1262,7 +1485,6 @@ export function startTerrainPreview(
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     if (meshReady) {
-      const elapsed = time / 1000;
       const aspect = canvas.width / canvas.height;
       const near = Math.max(0.01, distance * 0.02);
       const far = Math.max(distance * 10, meshRadius * 8);
@@ -1294,6 +1516,63 @@ export function startTerrainPreview(
         gl.drawElements(gl.LINES, wireIndexCount, wireIndexType, 0);
       }
       gl.bindVertexArray(null);
+
+      if (
+        aircraftReady &&
+        aircraftInstanceBuffer &&
+        aircraftVao &&
+        meshReference &&
+        currentView &&
+        aircraftList.length > 0
+      ) {
+        const sizes = computeAircraftSize(currentView, meshReference, meshScale, meshOffset, meshRadius);
+        const bounds = currentView.bounds;
+        const worldSize = sizes.world;
+        const enuSize = sizes.enu;
+        let count = 0;
+
+        for (const ac of aircraftList) {
+          if (ac.y + worldSize < bounds.top || ac.y - worldSize > bounds.bottom) {
+            continue;
+          }
+          const renderX = getWrappedX(ac.x, worldSize, bounds.left, bounds.right);
+          if (renderX === null) continue;
+
+          const altitude = (ac.onGround ? 0 : ac.altitude) + AIRCRAFT_ALTITUDE_OFFSET;
+          const pos = projectTesseraToEnu(renderX, ac.y, altitude, meshReference, meshScale, meshOffset);
+          const color = getAltitudeColor(ac.altitude, ac.onGround);
+
+          const base = count * AIRCRAFT_INSTANCE_STRIDE;
+          aircraftInstanceData[base] = pos[0];
+          aircraftInstanceData[base + 1] = pos[1];
+          aircraftInstanceData[base + 2] = pos[2];
+          aircraftInstanceData[base + 3] = ac.heading;
+          aircraftInstanceData[base + 4] = enuSize;
+          aircraftInstanceData[base + 5] = color[0];
+          aircraftInstanceData[base + 6] = color[1];
+          aircraftInstanceData[base + 7] = color[2];
+          count++;
+          if (count >= AIRCRAFT_MAX_INSTANCES) break;
+        }
+
+        if (count > 0) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, aircraftInstanceBuffer);
+          gl.bufferSubData(
+            gl.ARRAY_BUFFER,
+            0,
+            aircraftInstanceData.subarray(0, count * AIRCRAFT_INSTANCE_STRIDE)
+          );
+
+          gl.useProgram(aircraftProgram);
+          gl.uniformMatrix4fv(aircraftMvpLoc, false, mvp);
+          gl.bindVertexArray(aircraftVao);
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+          gl.drawArraysInstanced(gl.TRIANGLES, 0, AIRCRAFT_VERTEX_COUNT, count);
+          gl.disable(gl.BLEND);
+          gl.bindVertexArray(null);
+        }
+      }
     }
 
     animationId = requestAnimationFrame(render);
@@ -1323,11 +1602,16 @@ export function startTerrainPreview(
       gl.deleteBuffer(fillIbo);
       gl.deleteBuffer(wireIbo);
       if (vao) gl.deleteVertexArray(vao);
+      if (aircraftVao) gl.deleteVertexArray(aircraftVao);
+      gl.deleteBuffer(aircraftShapeBuffer);
+      gl.deleteBuffer(aircraftInstanceBuffer);
       if (atlas?.texture) gl.deleteTexture(atlas.texture);
       if (fallbackTexture) gl.deleteTexture(fallbackTexture);
       gl.deleteProgram(program);
+      gl.deleteProgram(aircraftProgram);
     },
     resize,
     setView,
+    setAircraft,
   };
 }

@@ -2205,8 +2205,11 @@ tessera.render = function () {
       centerX: activePane.camera.centerX,
       centerY: activePane.camera.centerY,
       zoom: activePane.camera.zoom,
+      viewportWidth: activeRect.width,
+      viewportHeight: activeRect.height,
       bounds: activeBounds,
     });
+    terrainPreview?.setAircraft(aircraftRenderer.aircraft);
 
     const minimapW = MINIMAP_WIDTH * uiScale;
     const minimapH = MINIMAP_HEIGHT * uiScale;
