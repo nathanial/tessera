@@ -13,7 +13,7 @@ out vec2 v_uv;
 void main() {
   vec3 normal = normalize(mat3(u_model) * a_normal);
   float diff = max(dot(normal, normalize(-u_lightDir)), 0.0);
-  v_light = 0.2 + 0.8 * diff;
+  v_light = 0.5 + 0.5 * diff;
   v_uv = a_uv;
   gl_Position = u_mvp * vec4(a_position, 1.0);
 }
@@ -28,10 +28,10 @@ uniform float u_textureMix;
 uniform vec3 u_color;
 out vec4 fragColor;
 void main() {
-  vec3 baseColor = u_color;
-  if (u_textureMix > 0.0) {
-    baseColor = texture(u_texture, v_uv).rgb;
-  }
+  vec3 texColor = texture(u_texture, v_uv).rgb;
+  texColor = pow(texColor, vec3(1.0 / 1.6));
+  texColor = clamp(texColor * 1.2, 0.0, 1.0);
+  vec3 baseColor = mix(u_color, texColor, u_textureMix);
   fragColor = vec4(baseColor * v_light, 1.0);
 }
 `;
@@ -48,7 +48,6 @@ const MAX_ELEVATION = 1.2;
 const FOV = Math.PI / 3.5;
 const RASTER_ZOOM_OFFSET = 0;
 const MAX_RASTER_TILES = 64;
-const RASTER_SUBDOMAINS = ["a", "b", "c", "d"] as const;
 
 interface TerrainLayer {
   tiles: string[];
@@ -109,8 +108,7 @@ function appendAccessToken(url: string, token: string): string {
 }
 
 function getRasterTileUrl(z: number, x: number, y: number): string {
-  const subdomain = RASTER_SUBDOMAINS[(x + y) % RASTER_SUBDOMAINS.length]!;
-  return `https://${subdomain}.basemaps.cartocdn.com/rastertiles/dark_all/${z}/${x}/${y}@2x.png`;
+  return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 }
 
 async function loadRasterTileImage(z: number, x: number, y: number): Promise<HTMLImageElement | null> {
@@ -392,9 +390,7 @@ async function buildRasterAtlas(
   const texture = gl.createTexture();
   if (!texture) return null;
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -1139,7 +1135,7 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
       gl.uniformMatrix4fv(mvpLoc, false, mvp);
       gl.uniformMatrix4fv(modelLoc, false, model);
       gl.uniform3f(lightLoc, -0.4, -0.6, 1.0);
-      gl.uniform3f(colorLoc, 0.12, 0.45, 0.32);
+      gl.uniform3f(colorLoc, 0.3, 0.7, 0.55);
       gl.uniform1f(textureMixLoc, textureReady ? 1 : 0);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, textureReady ? atlas?.texture ?? fallbackTexture : fallbackTexture);
