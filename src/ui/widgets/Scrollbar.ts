@@ -6,6 +6,7 @@
 
 import type { UIContext } from "../UIContext";
 import type { Color } from "../UITheme";
+import { hoverRect } from "./interaction";
 
 /** Scrollbar configuration */
 export interface ScrollbarConfig {
@@ -53,17 +54,15 @@ export function scrollbar(ui: UIContext, config: ScrollbarConfig): ScrollbarResu
   const scrollRatio = maxScroll > 0 ? clampedOffset / maxScroll : 0;
   const thumbY = y + scrollRatio * scrollableTrackHeight;
 
-  // Get mouse position
   const mouse = input.getMousePosition();
-  const isInTrack =
-    mouse.x >= x && mouse.x <= x + width && mouse.y >= y && mouse.y <= y + height;
-  const isOnThumb =
-    isInTrack && mouse.y >= thumbY && mouse.y <= thumbY + thumbHeight;
+  const { isHovered: isInTrack } = hoverRect(ui, { x, y, width, height });
+  const { isHovered: isOnThumb } = hoverRect(
+    ui,
+    { x, y: thumbY, width, height: thumbHeight },
+    { hotId: id }
+  );
 
-  // Handle hover
-  if (isInTrack) {
-    ui.setHovered();
-  }
+  // Hover state handled via hoverRect
 
   // Get drag state
   const dragState = state.getState<ScrollbarDragState | null>(`${id}:drag`, null);
@@ -86,7 +85,6 @@ export function scrollbar(ui: UIContext, config: ScrollbarConfig): ScrollbarResu
       state.deleteState(`${id}:drag`);
     }
   } else if (isOnThumb) {
-    state.setHot(id);
 
     if (input.isMouseDown()) {
       // Start drag

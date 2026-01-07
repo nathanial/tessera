@@ -6,6 +6,7 @@
  */
 
 import type { UIContext, Rect } from "../UIContext";
+import { hoverRect } from "./interaction";
 
 /** Tab definition */
 export interface Tab {
@@ -44,8 +45,8 @@ interface TabAreaState {
 export function tabArea(ui: UIContext, config: TabAreaConfig): TabAreaResult {
   const { id, x, y, width, height, tabs, activeTabId: controlledActiveTabId, renderContent } = config;
   const theme = ui.getTheme().tabArea;
-  const input = ui.getInput();
   const state = ui.getState();
+  const input = ui.getInput();
 
   // Get persistent state
   const defaultTabId = tabs.length > 0 ? tabs[0]!.id : "";
@@ -68,25 +69,17 @@ export function tabArea(ui: UIContext, config: TabAreaConfig): TabAreaResult {
   const tabCount = tabs.length;
   const tabWidth = tabCount > 0 ? width / tabCount : 0;
 
-  // Get mouse position
-  const mouse = input.getMousePosition();
-
   // Render tab headers
   for (let i = 0; i < tabs.length; i++) {
     const tab = tabs[i]!;
     const tabX = x + i * tabWidth;
     const tabRect = { x: tabX, y, width: tabWidth, height: headerHeight };
     const isActive = tab.id === activeTabId;
-    const isHovered = ui.pointInRect(mouse.x, mouse.y, tabRect);
+    const { isHovered } = hoverRect(ui, tabRect);
 
-    // Handle click
-    if (isHovered) {
-      ui.setHovered();
-
-      if (input.isMouseDown()) {
-        tabState.activeTabId = tab.id;
-        input.consumeInput();
-      }
+    if (isHovered && input.isMouseDown()) {
+      tabState.activeTabId = tab.id;
+      input.consumeInput();
     }
 
     // Determine background color

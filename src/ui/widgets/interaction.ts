@@ -10,6 +10,30 @@ export interface PressableOptions {
   disabled?: boolean;
 }
 
+export interface HoverOptions {
+  hotId?: string;
+}
+
+export function hoverRect(
+  ui: UIContext,
+  rect: Rect,
+  options: HoverOptions = {}
+): { isHovered: boolean } {
+  const input = ui.getInput();
+  const state = ui.getState();
+  const mouse = input.getMousePosition();
+  const isHovered = ui.pointInRect(mouse.x, mouse.y, rect);
+
+  if (isHovered) {
+    ui.setHovered();
+    if (options.hotId) {
+      state.setHot(options.hotId);
+    }
+  }
+
+  return { isHovered };
+}
+
 export function pressable(
   ui: UIContext,
   id: string,
