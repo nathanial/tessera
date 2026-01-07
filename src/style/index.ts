@@ -7,3 +7,4 @@
 export type { BlendMode, EnhancedFeatureStyle } from "./types";
 export { DEFAULT_ENHANCED_STYLE, computeEffectiveColor } from "./types";
 export { setBlendMode } from "./blendMode";
+export { BlendState } from "./blendState";

@@ -11,6 +11,7 @@ import { TemplateManager } from "./TemplateManager";
 import { FillRenderer } from "./FillRenderer";
 import { StrokeRenderer } from "./StrokeRenderer";
 import { fillGeoJSON, strokeGeoJSON, type PathApi } from "./GeoJSONHelpers";
+import { BlendState } from "../style/blendState";
 import type { Mat3 } from "../math/mat3";
 
 export interface DrawContextOptions {
@@ -28,6 +29,7 @@ export class DrawContext implements PathApi {
   private fillRenderer: FillRenderer;
   private strokeRenderer: StrokeRenderer;
   private templateManager: TemplateManager;
+  private blendState: BlendState;
 
   // Current matrix (set by render call)
   private matrix: Mat3 | null = null;
@@ -49,6 +51,7 @@ export class DrawContext implements PathApi {
     this.fillRenderer = new FillRenderer(this.gl);
     this.strokeRenderer = new StrokeRenderer(this.gl);
     this.templateManager = new TemplateManager(this.gl);
+    this.blendState = new BlendState(this.gl);
   }
 
   // ==================== State Properties ====================
@@ -169,8 +172,7 @@ export class DrawContext implements PathApi {
     if (!this.matrix) return;
 
     // Enable blending
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    this.blendState.enable("normal");
 
     // Render fills
     this.fillRenderer.render(this.matrix);

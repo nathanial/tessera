@@ -11,6 +11,7 @@ import { createAtlasTexture, type FontAtlas, type IconAtlas } from "./AtlasManag
 import { TextGeometryBuilder } from "./TextGeometryBuilder";
 import { IconGeometryBuilder } from "./IconGeometryBuilder";
 import type { FontAtlasMetadata, IconAtlasMetadata, TextStyle, IconStyle } from "./types";
+import { BlendState } from "../style/blendState";
 import type { Mat3 } from "../math/mat3";
 
 /**
@@ -41,6 +42,7 @@ export class SDFRenderer {
   // Geometry builders
   private textBuilder: TextGeometryBuilder;
   private iconBuilder: IconGeometryBuilder;
+  private blendState: BlendState;
 
   private _destroyed = false;
 
@@ -64,6 +66,7 @@ export class SDFRenderer {
     // Create geometry builders
     this.textBuilder = new TextGeometryBuilder(gl);
     this.iconBuilder = new IconGeometryBuilder(gl);
+    this.blendState = new BlendState(gl);
   }
 
   /**
@@ -154,8 +157,7 @@ export class SDFRenderer {
     const gl = this.gl;
 
     // Setup rendering state
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    this.blendState.enable("normal");
 
     gl.useProgram(this.program);
     gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
@@ -170,7 +172,7 @@ export class SDFRenderer {
     // Render icons
     this.renderIcons(gl);
 
-    gl.disable(gl.BLEND);
+    this.blendState.disable();
   }
 
   private renderText(gl: WebGL2RenderingContext): void {

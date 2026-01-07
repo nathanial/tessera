@@ -7,7 +7,7 @@
  */
 
 import { createFillProgramInfo, createStrokeProgramInfo } from "../shaders/programs";
-import { setBlendMode, type BlendMode } from "../style/index";
+import { BlendState } from "../style/index";
 import { BatchGroup } from "./BatchGroup";
 import { batchKeyToString, compareBatchKeys } from "./BatchKey";
 import type { BatchableFeature } from "./types";
@@ -24,6 +24,7 @@ export class BatchRenderer {
 
   private fillProgram: WebGLProgram;
   private strokeProgram: WebGLProgram;
+  private blendState: BlendState;
 
   private fillUniforms: {
     matrix: WebGLUniformLocation;
@@ -52,6 +53,7 @@ export class BatchRenderer {
     this.strokeProgram = strokeProgramInfo.program;
     this.fillUniforms = fillProgramInfo.uniforms;
     this.strokeUniforms = strokeProgramInfo.uniforms;
+    this.blendState = new BlendState(gl);
   }
 
   /**
@@ -116,17 +118,12 @@ export class BatchRenderer {
 
     const gl = this.gl;
 
-    gl.enable(gl.BLEND);
-
     let currentProgram: "fill" | "stroke" | null = null;
-    let currentBlendMode: BlendMode | null = null;
+    this.blendState.enable();
 
     for (const batch of this.sortedBatches) {
       // Switch blend mode if needed
-      if (batch.key.blendMode !== currentBlendMode) {
-        currentBlendMode = batch.key.blendMode;
-        setBlendMode(gl, currentBlendMode);
-      }
+      this.blendState.setMode(batch.key.blendMode);
 
       // Switch program if needed
       if (batch.key.programType !== currentProgram) {
@@ -157,7 +154,7 @@ export class BatchRenderer {
       batch.draw();
     }
 
-    gl.disable(gl.BLEND);
+    this.blendState.disable();
   }
 
   /**

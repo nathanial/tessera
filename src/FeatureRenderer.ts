@@ -8,7 +8,7 @@
 import { Geometry } from "./Geometry";
 import { createFillProgramInfo, createStrokeProgramInfo } from "./shaders/programs";
 import { tessellateGeoJSON, extrudeGeoJSON, type CapStyle } from "./geometry/index";
-import { setBlendMode, computeEffectiveColor, type BlendMode } from "./style/index";
+import { BlendState, computeEffectiveColor, type BlendMode } from "./style/index";
 import type { Color } from "./types/color";
 
 // Re-export BlendMode for convenience
@@ -79,6 +79,7 @@ export class FeatureRenderer {
 
   private fillProgram: WebGLProgram;
   private strokeProgram: WebGLProgram;
+  private blendState: BlendState;
 
   // Fill uniform locations
   private fillUniforms: {
@@ -107,6 +108,7 @@ export class FeatureRenderer {
     this.strokeProgram = strokeProgramInfo.program;
     this.fillUniforms = fillProgramInfo.uniforms;
     this.strokeUniforms = strokeProgramInfo.uniforms;
+    this.blendState = new BlendState(gl);
   }
 
   /**
@@ -259,9 +261,7 @@ export class FeatureRenderer {
     );
 
     // Enable blending for transparency
-    gl.enable(gl.BLEND);
-
-    let currentBlendMode: BlendMode | null = null;
+    this.blendState.enable();
     let currentProgram: "fill" | "stroke" | null = null;
 
     // Render in z-order: for each feature, render fill then stroke
@@ -269,10 +269,7 @@ export class FeatureRenderer {
       const { style } = feature;
 
       // Update blend mode if changed
-      if (style.blendMode !== currentBlendMode) {
-        currentBlendMode = style.blendMode;
-        setBlendMode(gl, currentBlendMode);
-      }
+      this.blendState.setMode(style.blendMode);
 
       // Render fill if present
       if (feature.fillGeometry) {
@@ -311,7 +308,7 @@ export class FeatureRenderer {
       }
     }
 
-    gl.disable(gl.BLEND);
+    this.blendState.disable();
   }
 
   /**

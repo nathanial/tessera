@@ -13,6 +13,7 @@ import {
 } from "./shaders";
 import { createShapeGeometry } from "./shapes";
 import type { PointShape, PointInstance, ShapeGeometry } from "./types";
+import { BlendState } from "../style/blendState";
 import type { Mat3 } from "../math/mat3";
 
 /** Bytes per float */
@@ -48,6 +49,7 @@ export class InstancedPointRenderer {
   // Instance data buffer
   private instanceBuffer: Buffer;
   private instanceCount = 0;
+  private blendState: BlendState;
 
   private currentShape: PointShape | null = null;
   private _destroyed = false;
@@ -61,6 +63,7 @@ export class InstancedPointRenderer {
       instancedPointVertexShader,
       instancedPointFragmentShader
     );
+    this.blendState = new BlendState(gl);
 
     // Cache uniform locations
     this.uniforms = {
@@ -170,8 +173,7 @@ export class InstancedPointRenderer {
 
     const gl = this.gl;
 
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    this.blendState.enable("normal");
 
     gl.useProgram(this.program);
     gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
@@ -189,7 +191,7 @@ export class InstancedPointRenderer {
     );
 
     gl.bindVertexArray(null);
-    gl.disable(gl.BLEND);
+    this.blendState.disable();
   }
 
   /**
