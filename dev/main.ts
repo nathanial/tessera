@@ -67,6 +67,7 @@ import {
 import { TrailRenderer } from "./TrailRenderer";
 import { screenToWorld, worldToScreen, getWrappedX } from "./CoordinateUtils";
 import { renderDebugGrid, renderStatsOverlay } from "./UIController";
+import { startSpinningCube } from "./SpinningCube";
 
 console.log(`Tessera v${VERSION}`);
 
@@ -76,6 +77,12 @@ console.log(`Tessera v${VERSION}`);
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const tessera = new Tessera({ canvas });
+
+const cubeCanvas = document.getElementById("cube-canvas") as HTMLCanvasElement | null;
+if (cubeCanvas) {
+  const cube = startSpinningCube(cubeCanvas);
+  window.addEventListener("resize", cube.resize);
+}
 
 // Create immediate mode draw context
 const draw = tessera.createDrawContext();
