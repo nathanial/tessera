@@ -6,9 +6,7 @@
  */
 
 import { Geometry } from "./Geometry";
-import { createProgram } from "./shaders/compile";
-import { fillVertexShader, fillFragmentShader } from "./shaders/fill";
-import { strokeVertexShader, strokeFragmentShader } from "./shaders/stroke";
+import { createFillProgramInfo, createStrokeProgramInfo } from "./shaders/programs";
 import { tessellateGeoJSON, extrudeGeoJSON, type CapStyle } from "./geometry/index";
 import { setBlendMode, computeEffectiveColor, type BlendMode } from "./style/index";
 import type { Color } from "./types/color";
@@ -102,26 +100,13 @@ export class FeatureRenderer {
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
 
-    // Create shader programs
-    this.fillProgram = createProgram(gl, fillVertexShader, fillFragmentShader);
-    this.strokeProgram = createProgram(
-      gl,
-      strokeVertexShader,
-      strokeFragmentShader
-    );
+    const fillProgramInfo = createFillProgramInfo(gl);
+    const strokeProgramInfo = createStrokeProgramInfo(gl);
 
-    // Get uniform locations
-    this.fillUniforms = {
-      matrix: gl.getUniformLocation(this.fillProgram, "u_matrix")!,
-      color: gl.getUniformLocation(this.fillProgram, "u_color")!,
-    };
-
-    this.strokeUniforms = {
-      matrix: gl.getUniformLocation(this.strokeProgram, "u_matrix")!,
-      color: gl.getUniformLocation(this.strokeProgram, "u_color")!,
-      halfWidth: gl.getUniformLocation(this.strokeProgram, "u_halfWidth")!,
-      viewport: gl.getUniformLocation(this.strokeProgram, "u_viewport")!,
-    };
+    this.fillProgram = fillProgramInfo.program;
+    this.strokeProgram = strokeProgramInfo.program;
+    this.fillUniforms = fillProgramInfo.uniforms;
+    this.strokeUniforms = strokeProgramInfo.uniforms;
   }
 
   /**

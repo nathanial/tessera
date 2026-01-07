@@ -131,56 +131,18 @@ export class Tessera {
       this.lastDebugTime = now;
     }
 
-    // Setup shader
-    gl.useProgram(this.program);
-    this.quadGeometry.bind();
-
-    // Camera matrix
-    const matrix = this.camera.getMatrix(width, height);
-    gl.uniformMatrix3fv(this.uniforms.matrix, false, matrix);
-
-    // Tile scale (world units per tile)
-    const tileZoom = Math.floor(this.camera.zoom);
-    const numTiles = Math.pow(2, tileZoom);
-    const tileScale = 1 / numTiles;
-    gl.uniform1f(this.uniforms.tileScale, tileScale);
-
-    // Draw each tile (with fallback to lower-zoom tiles)
-    gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(this.uniforms.texture, 0);
-
-    let loadedCount = 0;
-    let fallbackCount = 0;
-
-    for (const tile of tiles) {
-      const result = this.tileManager.getTileWithFallback(tile.z, tile.x, tile.y);
-      if (!result) {
-        // No tile available (shouldn't happen after base tiles load)
-        this.requestRender();
-        continue;
-      }
-
-      if (result.isExact) {
-        loadedCount++;
-      } else {
-        fallbackCount++;
-        // Request render to check if exact tile has loaded
-        this.requestRender();
-      }
-
-      gl.bindTexture(gl.TEXTURE_2D, result.texture);
-      // Use worldX for positioning (unwrapped), tile.x is for texture lookup
-      gl.uniform2f(this.uniforms.tileOffset, tile.worldX, tile.y);
-      gl.uniform2f(this.uniforms.uvOffset, result.uvOffset[0], result.uvOffset[1]);
-      gl.uniform1f(this.uniforms.uvScale, result.uvScale);
-      this.quadGeometry.draw();
-    }
+    const { loadedCount, fallbackCount } = this.renderTilesInternal(
+      this.camera,
+      width,
+      height,
+      tiles
+    );
 
     if (now - this.lastDebugTime < 100 && (loadedCount > 0 || fallbackCount > 0)) {
-      console.log(`[Tessera] rendered ${loadedCount} exact + ${fallbackCount} fallback / ${tiles.length} tiles`);
+      console.log(
+        `[Tessera] rendered ${loadedCount} exact + ${fallbackCount} fallback / ${tiles.length} tiles`
+      );
     }
-
-    this.quadGeometry.unbind();
   }
 
   /**
@@ -188,8 +150,6 @@ export class Tessera {
    * Assumes viewport/scissor are already configured by the caller.
    */
   renderTiles(camera: Camera, viewportWidth: number, viewportHeight: number): void {
-    const gl = this.gl;
-
     const tiles = this.tileManager.getVisibleTiles(
       camera.centerX,
       camera.centerY,
@@ -197,6 +157,17 @@ export class Tessera {
       viewportWidth,
       viewportHeight
     );
+
+    this.renderTilesInternal(camera, viewportWidth, viewportHeight, tiles);
+  }
+
+  private renderTilesInternal(
+    camera: Camera,
+    viewportWidth: number,
+    viewportHeight: number,
+    tiles: ReturnType<TileManager["getVisibleTiles"]>
+  ): { loadedCount: number; fallbackCount: number } {
+    const gl = this.gl;
 
     gl.useProgram(this.program);
     this.quadGeometry.bind();
@@ -212,6 +183,9 @@ export class Tessera {
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.uniforms.texture, 0);
 
+    let loadedCount = 0;
+    let fallbackCount = 0;
+
     for (const tile of tiles) {
       const result = this.tileManager.getTileWithFallback(tile.z, tile.x, tile.y);
       if (!result) {
@@ -219,7 +193,10 @@ export class Tessera {
         continue;
       }
 
-      if (!result.isExact) {
+      if (result.isExact) {
+        loadedCount++;
+      } else {
+        fallbackCount++;
         this.requestRender();
       }
 
@@ -231,6 +208,8 @@ export class Tessera {
     }
 
     this.quadGeometry.unbind();
+
+    return { loadedCount, fallbackCount };
   }
 
   /** Start the render loop */

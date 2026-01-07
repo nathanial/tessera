@@ -3,5 +3,6 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "dev/**/*.test.ts"],
+    setupFiles: ["./vitest.setup.ts"],
   },
 });

@@ -2,8 +2,7 @@
  * Fill renderer - handles fill program, VAO, and batch rendering.
  */
 
-import { createProgram } from "../shaders/compile";
-import { fillVertexShader, fillFragmentShader } from "../shaders/fill";
+import { createFillProgramInfo } from "../shaders/programs";
 import { DynamicBuffer } from "./DynamicBuffer";
 import type { Color } from "./DrawState";
 import type { Mat3 } from "../math/mat3";
@@ -42,15 +41,11 @@ export class FillRenderer {
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
 
-    // Create shader program
-    this.program = createProgram(gl, fillVertexShader, fillFragmentShader);
-
-    // Get attribute location
-    this.positionAttrib = gl.getAttribLocation(this.program, "a_position");
-
-    // Get uniform locations
-    this.matrixUniform = gl.getUniformLocation(this.program, "u_matrix")!;
-    this.colorUniform = gl.getUniformLocation(this.program, "u_color")!;
+    const programInfo = createFillProgramInfo(gl);
+    this.program = programInfo.program;
+    this.positionAttrib = programInfo.attribs.position;
+    this.matrixUniform = programInfo.uniforms.matrix;
+    this.colorUniform = programInfo.uniforms.color;
 
     // Create dynamic buffers
     this.vertices = new DynamicBuffer(gl, "vertex", 4096);

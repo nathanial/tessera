@@ -6,6 +6,7 @@
 
 import type { UIContext } from "../UIContext";
 import type { Color } from "../UITheme";
+import { pressable } from "./interaction";
 
 /** Toggle button configuration */
 export interface ToggleButtonConfig {
@@ -32,40 +33,13 @@ export interface ToggleButtonResult {
 export function toggleButton(ui: UIContext, config: ToggleButtonConfig): ToggleButtonResult {
   const { id, x, y, width, height, label, isOn, onColor, offColor } = config;
   const theme = ui.getTheme().toggleButton;
-  const input = ui.getInput();
-  const state = ui.getState();
-
-  // Get mouse position and check bounds
-  const mouse = input.getMousePosition();
-  const isInBounds = ui.pointInRect(mouse.x, mouse.y, { x, y, width, height });
-
-  // Track interaction states
-  let isHovered = false;
-  let toggled = false;
-
-  // Handle hover
-  if (isInBounds) {
-    ui.setHovered();
-    state.setHot(id);
-    isHovered = true;
-
-    // Handle mouse down - set active
-    if (input.isMouseDown()) {
-      state.setActive(id);
-      input.consumeInput();
-    }
-  }
-
-  // Check if this button is currently pressed
-  const isPressed = state.isActive(id);
-
-  // Handle click - mouse up while active and in bounds
-  if (isPressed && input.isMouseUp()) {
-    if (isInBounds) {
-      toggled = true;
-    }
-    state.clearActive();
-  }
+  const { isHovered, isPressed, clicked } = pressable(ui, id, {
+    x,
+    y,
+    width,
+    height,
+  });
+  const toggled = clicked;
 
   // Determine background color based on state
   let bgColor: Color;

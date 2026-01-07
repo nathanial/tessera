@@ -2,8 +2,7 @@
  * Stroke renderer - handles stroke program, VAO, and batch rendering.
  */
 
-import { createProgram } from "../shaders/compile";
-import { strokeVertexShader, strokeFragmentShader } from "../shaders/stroke";
+import { createStrokeProgramInfo } from "../shaders/programs";
 import { DynamicBuffer } from "./DynamicBuffer";
 import type { Color } from "./DrawState";
 import type { Mat3 } from "../math/mat3";
@@ -47,19 +46,15 @@ export class StrokeRenderer {
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
 
-    // Create shader program
-    this.program = createProgram(gl, strokeVertexShader, strokeFragmentShader);
-
-    // Get attribute locations
-    this.positionAttrib = gl.getAttribLocation(this.program, "a_position");
-    this.normalAttrib = gl.getAttribLocation(this.program, "a_normal");
-    this.sideAttrib = gl.getAttribLocation(this.program, "a_side");
-
-    // Get uniform locations
-    this.matrixUniform = gl.getUniformLocation(this.program, "u_matrix")!;
-    this.colorUniform = gl.getUniformLocation(this.program, "u_color")!;
-    this.halfWidthUniform = gl.getUniformLocation(this.program, "u_halfWidth")!;
-    this.viewportUniform = gl.getUniformLocation(this.program, "u_viewport")!;
+    const programInfo = createStrokeProgramInfo(gl);
+    this.program = programInfo.program;
+    this.positionAttrib = programInfo.attribs.position;
+    this.normalAttrib = programInfo.attribs.normal;
+    this.sideAttrib = programInfo.attribs.side;
+    this.matrixUniform = programInfo.uniforms.matrix;
+    this.colorUniform = programInfo.uniforms.color;
+    this.halfWidthUniform = programInfo.uniforms.halfWidth;
+    this.viewportUniform = programInfo.uniforms.viewport;
 
     // Create dynamic buffers
     this.vertices = new DynamicBuffer(gl, "vertex", 4096);

@@ -5,6 +5,7 @@
  */
 
 import type { UIContext } from "../UIContext";
+import { pressable } from "./interaction";
 
 /** Button configuration */
 export interface ButtonConfig {
@@ -30,43 +31,12 @@ export interface ButtonResult {
 export function button(ui: UIContext, config: ButtonConfig): ButtonResult {
   const { id, x, y, width, height, label, disabled = false } = config;
   const theme = ui.getTheme().button;
-  const input = ui.getInput();
-  const state = ui.getState();
-
-  // Get mouse position and check bounds
-  const mouse = input.getMousePosition();
-  const isInBounds = ui.pointInRect(mouse.x, mouse.y, { x, y, width, height });
-
-  // Track interaction states
-  let isHovered = false;
-  let isPressed = false;
-  let clicked = false;
-
-  if (!disabled) {
-    // Handle hover
-    if (isInBounds) {
-      ui.setHovered();
-      state.setHot(id);
-      isHovered = true;
-
-      // Handle mouse down - set active
-      if (input.isMouseDown()) {
-        state.setActive(id);
-        input.consumeInput();
-      }
-    }
-
-    // Check if this button is currently pressed
-    isPressed = state.isActive(id);
-
-    // Handle click - mouse up while active and in bounds
-    if (isPressed && input.isMouseUp()) {
-      if (isInBounds) {
-        clicked = true;
-      }
-      state.clearActive();
-    }
-  }
+  const { isHovered, isPressed, clicked } = pressable(
+    ui,
+    id,
+    { x, y, width, height },
+    { disabled }
+  );
 
   // Determine background color based on state
   let bgColor = theme.background;
