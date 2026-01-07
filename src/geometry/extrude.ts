@@ -9,6 +9,11 @@ import { addRoundCap, addSquareCap } from "./caps";
 // Vertex stride: x, y, nx, ny, side
 const STRIDE = 5;
 
+export interface ExtrudePolylineOptions extends ExtrudeOptions {
+  /** Treat the polyline as closed (no caps, wraps last to first) */
+  closed?: boolean;
+}
+
 /**
  * Extrude a polyline into a triangle mesh suitable for rendering.
  *
@@ -20,11 +25,11 @@ const STRIDE = 5;
  * @param coords - Line coordinates [[x,y], [x,y], ...]
  * @param options - Extrusion options
  */
-export function extrudeLine(
+export function extrudePolyline(
   coords: Coord[],
-  options: ExtrudeOptions = {}
+  options: ExtrudePolylineOptions = {}
 ): ExtrudedLine {
-  const { cap = "butt", miterLimit = 10 } = options;
+  const { cap = "butt", miterLimit = 10, closed = false } = options;
 
   if (coords.length < 2) {
     return {
@@ -40,9 +45,10 @@ export function extrudeLine(
   const normals: Vec2[] = [];
   const directions: Vec2[] = [];
 
-  for (let i = 0; i < coords.length - 1; i++) {
+  const numSegments = closed ? coords.length : coords.length - 1;
+  for (let i = 0; i < numSegments; i++) {
     const p1 = coords[i]!;
-    const p2 = coords[i + 1]!;
+    const p2 = coords[(i + 1) % coords.length]!;
     const dx = p2[0] - p1[0];
     const dy = p2[1] - p1[1];
     directions.push(normalize([dx, dy]));
@@ -55,7 +61,16 @@ export function extrudeLine(
 
     let miterX: number, miterY: number, miterScale: number;
 
-    if (i === 0) {
+    if (closed) {
+      // All vertices are interior for closed paths
+      const prevIdx = (i - 1 + normals.length) % normals.length;
+      const currIdx = i % normals.length;
+      [miterX, miterY, miterScale] = computeMiter(
+        normals[prevIdx]!,
+        normals[currIdx]!,
+        miterLimit
+      );
+    } else if (i === 0) {
       // Start point
       [miterX, miterY] = normals[0]!;
       miterScale = 1;
@@ -80,14 +95,16 @@ export function extrudeLine(
   }
 
   // Generate indices for triangle strip (two triangles per segment)
-  for (let i = 0; i < coords.length - 1; i++) {
+  const numVerts = coords.length;
+  for (let i = 0; i < numSegments; i++) {
     const base = i * 2;
-    indices.push(base, base + 1, base + 2);
-    indices.push(base + 1, base + 3, base + 2);
+    const next = ((i + 1) % numVerts) * 2;
+    indices.push(base, base + 1, next);
+    indices.push(base + 1, next + 1, next);
   }
 
-  // Handle caps
-  if (cap !== "butt") {
+  // Handle caps for open paths
+  if (!closed && cap !== "butt") {
     let nextIndex = coords.length * 2;
 
     if (cap === "round") {
@@ -138,6 +155,24 @@ export function extrudeLine(
       : new Uint16Array(indices);
 
   return { vertices: vertexArray, indices: indexArray };
+}
+
+/**
+ * Extrude a polyline into a triangle mesh suitable for rendering.
+ *
+ * Each vertex contains: [x, y, normalX, normalY, side]
+ * - position (x, y): Base line coordinate
+ * - normal (nx, ny): Extrusion direction
+ * - side: Miter scale (+/- value, positive for left, negative for right)
+ *
+ * @param coords - Line coordinates [[x,y], [x,y], ...]
+ * @param options - Extrusion options
+ */
+export function extrudeLine(
+  coords: Coord[],
+  options: ExtrudeOptions = {}
+): ExtrudedLine {
+  return extrudePolyline(coords, options);
 }
 
 /** GeoJSON LineString type */

@@ -2,6 +2,8 @@
  * Tile loading and texture management
  */
 
+import { TILE_SIZE } from "./constants";
+
 export interface TileCoord {
   z: number;
   /** Wrapped X coordinate for texture lookup (0 to 2^z - 1) */
@@ -76,7 +78,7 @@ export class TileManager {
   }
 
   /** Tile size in CSS pixels (512 for @2x retina tiles) */
-  static readonly TILE_SIZE = 512;
+  static readonly TILE_SIZE = TILE_SIZE;
 
   /** Get visible tile coordinates for the current view */
   getVisibleTiles(

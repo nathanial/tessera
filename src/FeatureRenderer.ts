@@ -11,13 +11,14 @@ import { fillVertexShader, fillFragmentShader } from "./shaders/fill";
 import { strokeVertexShader, strokeFragmentShader } from "./shaders/stroke";
 import { tessellateGeoJSON, extrudeGeoJSON, type CapStyle } from "./geometry/index";
 import { setBlendMode, computeEffectiveColor, type BlendMode } from "./style/index";
+import type { Color } from "./types/color";
 
 // Re-export BlendMode for convenience
 export type { BlendMode } from "./style/index";
 import type { Mat3 } from "./math/mat3";
 
 /** RGBA color as [r, g, b, a] with values 0-1 */
-export type Color = [number, number, number, number];
+export type { Color };
 
 /** Style options for a feature */
 export interface FeatureStyle {

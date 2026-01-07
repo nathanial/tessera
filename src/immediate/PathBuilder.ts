@@ -5,15 +5,10 @@
  * the path to triangles for filling or extruded geometry for stroking.
  */
 
-import earcut from "earcut";
 import type { LineCap } from "./DrawState";
-import {
-  normalize,
-  perpendicular,
-  computeMiter,
-  type Vec2,
-} from "../math/vec2";
-import { addRoundCap, addSquareCap } from "../geometry/caps";
+import { extrudePolyline } from "../geometry/extrude";
+import { tessellatePolygon } from "../geometry/tessellate";
+import type { Vec2 } from "../math/vec2";
 
 export type Coord = Vec2;
 
@@ -163,22 +158,15 @@ export class PathBuilder {
     for (const subPath of this.subPaths) {
       if (subPath.points.length < 3) continue;
 
-      // Flatten coordinates for earcut
-      const coords: number[] = [];
-      for (const [x, y] of subPath.points) {
-        coords.push(x, y);
-      }
-
-      // Run earcut
-      const indices = earcut(coords, undefined, 2);
+      const result = tessellatePolygon(subPath.points);
 
       // Add to combined arrays
       const indexOffset = allVertices.length / 2;
-      for (let i = 0; i < coords.length; i++) {
-        allVertices.push(coords[i]!);
+      for (let i = 0; i < result.vertices.length; i++) {
+        allVertices.push(result.vertices[i]!);
       }
-      for (let i = 0; i < indices.length; i++) {
-        allIndices.push(indices[i]! + indexOffset);
+      for (let i = 0; i < result.indices.length; i++) {
+        allIndices.push(result.indices[i]! + indexOffset);
       }
     }
 
@@ -216,12 +204,11 @@ export class PathBuilder {
       if (coords.length < 2) continue;
 
       const baseIndex = allVertices.length / STROKE_STRIDE;
-      const result = this.extrudePolyline(
-        coords,
-        subPath.closed,
+      const result = extrudePolyline(coords, {
         cap,
-        miterLimit
-      );
+        miterLimit,
+        closed: subPath.closed,
+      });
 
       for (let i = 0; i < result.vertices.length; i++) {
         allVertices.push(result.vertices[i]!);
@@ -240,124 +227,4 @@ export class PathBuilder {
     return { vertices, indices };
   }
 
-  /**
-   * Extrude a single polyline
-   */
-  private extrudePolyline(
-    coords: Coord[],
-    closed: boolean,
-    cap: LineCap,
-    miterLimit: number
-  ): { vertices: number[]; indices: number[] } {
-    const vertices: number[] = [];
-    const indices: number[] = [];
-
-    // Compute segment normals and directions
-    const normals: Coord[] = [];
-    const directions: Coord[] = [];
-
-    const numSegments = closed ? coords.length : coords.length - 1;
-
-    for (let i = 0; i < numSegments; i++) {
-      const p1 = coords[i]!;
-      const p2 = coords[(i + 1) % coords.length]!;
-      const dx = p2[0] - p1[0];
-      const dy = p2[1] - p1[1];
-      directions.push(normalize([dx, dy]));
-      normals.push(perpendicular(dx, dy));
-    }
-
-    // Process each vertex
-    for (let i = 0; i < coords.length; i++) {
-      const point = coords[i]!;
-
-      let miterX: number, miterY: number, miterScale: number;
-
-      if (closed) {
-        // All vertices are interior for closed paths
-        const prevIdx = (i - 1 + normals.length) % normals.length;
-        const currIdx = i % normals.length;
-        [miterX, miterY, miterScale] = computeMiter(
-          normals[prevIdx]!,
-          normals[currIdx]!,
-          miterLimit
-        );
-      } else if (i === 0) {
-        // Start point
-        [miterX, miterY] = normals[0]!;
-        miterScale = 1;
-      } else if (i === coords.length - 1) {
-        // End point
-        [miterX, miterY] = normals[normals.length - 1]!;
-        miterScale = 1;
-      } else {
-        // Interior vertex with miter join
-        [miterX, miterY, miterScale] = computeMiter(
-          normals[i - 1]!,
-          normals[i]!,
-          miterLimit
-        );
-      }
-
-      // Add two vertices (left and right sides)
-      vertices.push(
-        point[0], point[1], miterX, miterY, miterScale,   // left side
-        point[0], point[1], miterX, miterY, -miterScale   // right side
-      );
-    }
-
-    // Generate indices for triangle strip
-    const numVerts = coords.length;
-    for (let i = 0; i < numSegments; i++) {
-      const base = i * 2;
-      const next = ((i + 1) % numVerts) * 2;
-      indices.push(base, base + 1, next);
-      indices.push(base + 1, next + 1, next);
-    }
-
-    // Handle caps for open paths
-    if (!closed && cap !== "butt") {
-      let nextIndex = coords.length * 2;
-
-      if (cap === "round") {
-        // Start cap
-        nextIndex = addRoundCap(
-          vertices, indices,
-          coords[0]!,
-          normals[0]!,
-          true,
-          nextIndex
-        );
-        // End cap
-        addRoundCap(
-          vertices, indices,
-          coords[coords.length - 1]!,
-          normals[normals.length - 1]!,
-          false,
-          nextIndex
-        );
-      } else if (cap === "square") {
-        // Start cap
-        nextIndex = addSquareCap(
-          vertices, indices,
-          coords[0]!,
-          normals[0]!,
-          directions[0]!,
-          true,
-          nextIndex
-        );
-        // End cap
-        addSquareCap(
-          vertices, indices,
-          coords[coords.length - 1]!,
-          normals[normals.length - 1]!,
-          directions[directions.length - 1]!,
-          false,
-          nextIndex
-        );
-      }
-    }
-
-    return { vertices, indices };
-  }
 }

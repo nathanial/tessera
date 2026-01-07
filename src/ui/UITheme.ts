@@ -5,8 +5,8 @@
  * All colors are RGBA in 0-1 range.
  */
 
-/** RGBA color in 0-1 range */
-export type Color = [number, number, number, number];
+import type { Color } from "../types/color";
+export type { Color };
 
 export interface ButtonTheme {
   background: Color;

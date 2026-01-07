@@ -4,7 +4,7 @@
  * Types for efficient point/marker rendering using GPU instancing.
  */
 
-import type { Color } from "../FeatureRenderer";
+import type { Color } from "../types/color";
 
 /** Available point shapes */
 export type PointShape = "circle" | "square" | "triangle" | "diamond";

@@ -5,7 +5,7 @@
  */
 
 import { Geometry, type AttributeLayout } from "../Geometry";
-import type { Color } from "../FeatureRenderer";
+import type { Color } from "../types/color";
 import type { BatchKey } from "./types";
 
 /**

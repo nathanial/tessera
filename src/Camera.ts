@@ -2,6 +2,7 @@
  * 2D Camera with pan and zoom
  */
 
+import { TILE_SIZE } from "./constants";
 import { type Mat3, multiply, translate, scale } from "./math/mat3";
 
 export class Camera {
@@ -13,7 +14,7 @@ export class Camera {
   zoom = 0;
 
   /** Tile size in CSS pixels (512 for @2x retina tiles) */
-  static readonly TILE_SIZE = 512;
+  static readonly TILE_SIZE = TILE_SIZE;
 
   // Inertial zoom animation state
   private static readonly ZOOM_DECAY = 0.0000000001; // Faster decay for quicker stop

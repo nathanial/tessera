@@ -4,7 +4,7 @@
  * Enhanced styling options for Phase 3 rendering features.
  */
 
-import type { Color } from "../FeatureRenderer";
+import type { Color } from "../types/color";
 import type { CapStyle } from "../geometry/index";
 
 /** Blend modes for compositing */

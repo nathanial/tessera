@@ -5,7 +5,8 @@
  * Supports save/restore for state stack management.
  */
 
-export type Color = [number, number, number, number]; // RGBA 0-1
+import type { Color } from "../types/color";
+export type { Color };
 export type LineCap = "butt" | "round" | "square";
 export type LineJoin = "miter" | "round" | "bevel";
 

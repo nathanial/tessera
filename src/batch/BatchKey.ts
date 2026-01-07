@@ -4,7 +4,8 @@
  * Functions for creating and comparing batch keys.
  */
 
-import type { Color, BlendMode } from "../FeatureRenderer";
+import type { BlendMode } from "../FeatureRenderer";
+import type { Color } from "../types/color";
 import type { BatchKey } from "./types";
 
 /**

@@ -4,7 +4,7 @@
  * Types for Signed Distance Field text and icon rendering.
  */
 
-import type { Color } from "../FeatureRenderer";
+import type { Color } from "../types/color";
 
 /** Metrics for a single glyph in the font atlas */
 export interface GlyphMetrics {

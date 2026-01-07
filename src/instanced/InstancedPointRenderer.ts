@@ -117,10 +117,6 @@ export class InstancedPointRenderer {
 
     this.instanceBuffer.setData(instanceData);
     this.instanceCount = instances.length;
-
-    // Re-setup VAO to bind updated instance buffer
-    const shapeGeom = createShapeGeometry(shape);
-    this.setupVAO(shapeGeom);
   }
 
   private setupVAO(shapeGeom: ShapeGeometry): void {

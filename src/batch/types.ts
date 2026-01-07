@@ -4,7 +4,8 @@
  * Types for batching draw calls to reduce GPU state changes.
  */
 
-import type { Color, BlendMode } from "../FeatureRenderer";
+import type { BlendMode } from "../FeatureRenderer";
+import type { Color } from "../types/color";
 import type { AttributeLayout } from "../Geometry";
 
 /** Key for grouping features into batches */
