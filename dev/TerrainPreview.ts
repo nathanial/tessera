@@ -1,5 +1,5 @@
 import { TILE_SIZE } from "../src/constants";
-import { lonLatToTessera } from "../src/geo/projection";
+import { lonLatToTessera, tesseraToLonLat } from "../src/geo/projection";
 
 const VERTEX_SHADER = `#version 300 es
 in vec3 a_position;
@@ -64,10 +64,38 @@ interface TerrainMesh {
   radius: number;
 }
 
+interface TerrainView {
+  centerX: number;
+  centerY: number;
+  zoom: number;
+  bounds: {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  };
+}
+
 interface DecodedTile {
   positions: Float32Array<ArrayBuffer>;
   indices: Uint32Array<ArrayBuffer>;
   tesseraCoords: Float32Array<ArrayBuffer>;
+}
+
+interface LonLatBounds {
+  west: number;
+  east: number;
+  south: number;
+  north: number;
+}
+
+interface TileRange {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  xTiles: number;
+  yTiles: number;
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -347,6 +375,35 @@ function computeRasterRange(bounds: { minX: number; maxX: number; minY: number; 
   return { zoom, minTileX, maxTileX, minTileY, maxTileY, tilesWide, tilesHigh };
 }
 
+function computeTileRangeFromBounds(
+  bounds: LonLatBounds,
+  zoom: number,
+  projection: string,
+  scheme: "tms" | "xyz"
+): TileRange {
+  const { xTiles, yTiles } = tileCounts(projection, zoom);
+  const topLeft = lonLatToTileXY(bounds.west, bounds.north, zoom, projection, scheme);
+  const bottomRight = lonLatToTileXY(bounds.east, bounds.south, zoom, projection, scheme);
+
+  let minY = Math.min(topLeft.y, bottomRight.y);
+  let maxY = Math.max(topLeft.y, bottomRight.y);
+  minY = Math.max(0, Math.min(yTiles - 1, minY));
+  maxY = Math.max(0, Math.min(yTiles - 1, maxY));
+
+  let minX = topLeft.x;
+  let maxX = bottomRight.x;
+  if (bounds.east < bounds.west) {
+    if (maxX < minX) {
+      maxX += xTiles;
+    }
+  } else {
+    minX = Math.min(topLeft.x, bottomRight.x);
+    maxX = Math.max(topLeft.x, bottomRight.x);
+  }
+
+  return { minX, maxX, minY, maxY, xTiles, yTiles };
+}
+
 async function buildRasterAtlas(
   gl: WebGL2RenderingContext,
   coords: Float32Array,
@@ -534,37 +591,44 @@ function resolveTileUrl(layer: TerrainLayer & { baseUrl: string; accessToken: st
   return appendAccessToken(resolvedUrl, layer.accessToken);
 }
 
-async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: number): Promise<TerrainMesh> {
-  const layer = await fetchIonLayer(token);
+async function loadTerrainMesh(
+  token: string,
+  lat: number,
+  lon: number,
+  zoom: number,
+  viewBounds?: LonLatBounds,
+  layerOverride?: TerrainLayer & { baseUrl: string; accessToken: string }
+): Promise<TerrainMesh> {
+  const layer = layerOverride ?? await fetchIonLayer(token);
   const scheme = layer.scheme ?? "tms";
   const projection = layer.projection ?? "EPSG:4326";
 
   const { xTiles, yTiles } = tileCounts(projection, zoom);
   const { x: centerTileX, y: centerTileY } = lonLatToTileXY(lon, lat, zoom, projection, scheme);
-  const centerBounds = tileBounds(centerTileX, centerTileY, zoom, projection, scheme);
-  let centerLon = 0;
-  let centerLat = 0;
-  if (projection === "EPSG:3857") {
-    const centerMercX = (centerBounds.west + centerBounds.east) / 2;
-    const centerMercY = (centerBounds.south + centerBounds.north) / 2;
-    const center = mercatorToLonLat(centerMercX, centerMercY);
-    centerLon = center.lonDeg;
-    centerLat = center.latDeg;
-  } else {
-    centerLon = (centerBounds.west + centerBounds.east) / 2;
-    centerLat = (centerBounds.south + centerBounds.north) / 2;
-  }
+  const centerLon = lon;
+  const centerLat = lat;
   const centerECEF = lonLatHeightToECEF(centerLon, centerLat, 0);
   const refLon = (centerLon * Math.PI) / 180;
   const refLat = (centerLat * Math.PI) / 180;
 
   const tileCoords: { x: number; y: number }[] = [];
-  for (let dy = -TILE_RANGE; dy <= TILE_RANGE; dy++) {
-    const y = centerTileY + dy;
-    if (y < 0 || y >= yTiles) continue;
-    for (let dx = -TILE_RANGE; dx <= TILE_RANGE; dx++) {
-      const x = ((centerTileX + dx) % xTiles + xTiles) % xTiles;
-      tileCoords.push({ x, y });
+  if (viewBounds) {
+    const range = computeTileRangeFromBounds(viewBounds, zoom, projection, scheme);
+    for (let y = range.minY; y <= range.maxY; y++) {
+      if (y < 0 || y >= range.yTiles) continue;
+      for (let x = range.minX; x <= range.maxX; x++) {
+        const wrappedX = ((x % range.xTiles) + range.xTiles) % range.xTiles;
+        tileCoords.push({ x: wrappedX, y });
+      }
+    }
+  } else {
+    for (let dy = -TILE_RANGE; dy <= TILE_RANGE; dy++) {
+      const y = centerTileY + dy;
+      if (y < 0 || y >= yTiles) continue;
+      for (let dx = -TILE_RANGE; dx <= TILE_RANGE; dx++) {
+        const x = ((centerTileX + dx) % xTiles + xTiles) % xTiles;
+        tileCoords.push({ x, y });
+      }
     }
   }
 
@@ -862,7 +926,9 @@ function mat4RotateZ(angle: number): Float32Array {
   return out;
 }
 
-export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => void; resize: () => void } {
+export function startTerrainPreview(
+  canvas: HTMLCanvasElement
+): { stop: () => void; resize: () => void; setView: (view: TerrainView) => void } {
   const gl = canvas.getContext("webgl2", { antialias: true, alpha: true });
   if (!gl) {
     throw new Error("WebGL2 not supported for terrain preview");
@@ -914,6 +980,11 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   let lastX = 0;
   let lastY = 0;
   const target: [number, number, number] = [0, 0, 0];
+  let terrainLayer: (TerrainLayer & { baseUrl: string; accessToken: string }) | null = null;
+  let pendingView: TerrainView | null = null;
+  let lastView: TerrainView | null = null;
+  let viewDebounceId: number | null = null;
+  let loadId = 0;
 
   if (fallbackTexture) {
     gl.bindTexture(gl.TEXTURE_2D, fallbackTexture);
@@ -946,8 +1017,13 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     }
   };
 
-  const load = async () => {
-    const mesh = await loadTerrainMesh(token, TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
+  const getLayer = async () => {
+    if (terrainLayer) return terrainLayer;
+    terrainLayer = await fetchIonLayer(token);
+    return terrainLayer;
+  };
+
+  const applyMesh = (mesh: TerrainMesh, tileZoom: number) => {
     indexCount = mesh.indices.length;
     meshRadius = Math.max(mesh.radius, 0.001);
     distance = meshRadius * 1.8;
@@ -1004,9 +1080,10 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     meshReady = true;
 
     void (async () => {
-      const rasterZoom = Math.max(0, TERRAIN_ZOOM + RASTER_ZOOM_OFFSET);
+      const rasterZoom = Math.max(0, tileZoom + RASTER_ZOOM_OFFSET);
       const atlasResult = await buildRasterAtlas(gl, mesh.tesseraCoords, rasterZoom);
       if (!atlasResult) return;
+      if (atlas?.texture) gl.deleteTexture(atlas.texture);
       atlas = atlasResult;
       const uvs = computeAtlasUVs(mesh.tesseraCoords, atlasResult);
       gl.bindBuffer(gl.ARRAY_BUFFER, uvbo);
@@ -1015,7 +1092,70 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     })();
   };
 
-  void load();
+  const load = async (centerLat: number, centerLon: number, tileZoom: number, bounds?: LonLatBounds) => {
+    const currentLoadId = ++loadId;
+    try {
+      const layer = await getLayer();
+      const mesh = await loadTerrainMesh(token, centerLat, centerLon, tileZoom, bounds, layer);
+      if (currentLoadId !== loadId) return;
+      textureReady = false;
+      applyMesh(mesh, tileZoom);
+    } catch {
+      // Keep prior mesh if new load fails.
+    }
+  };
+
+  const viewsEqual = (a: TerrainView, b: TerrainView) => {
+    const epsilon = 1e-6;
+    return (
+      Math.abs(a.centerX - b.centerX) < epsilon &&
+      Math.abs(a.centerY - b.centerY) < epsilon &&
+      Math.abs(a.zoom - b.zoom) < epsilon &&
+      Math.abs(a.bounds.left - b.bounds.left) < epsilon &&
+      Math.abs(a.bounds.right - b.bounds.right) < epsilon &&
+      Math.abs(a.bounds.top - b.bounds.top) < epsilon &&
+      Math.abs(a.bounds.bottom - b.bounds.bottom) < epsilon
+    );
+  };
+
+  const applyView = async (view: TerrainView) => {
+    const center = tesseraToLonLat(view.centerX, view.centerY);
+    const west = tesseraToLonLat(view.bounds.left, view.centerY).lon;
+    const east = tesseraToLonLat(view.bounds.right, view.centerY).lon;
+    const north = tesseraToLonLat(view.centerX, view.bounds.top).lat;
+    const south = tesseraToLonLat(view.centerX, view.bounds.bottom).lat;
+    const tileZoom = Math.max(0, Math.floor(view.zoom));
+    const lonLatBounds: LonLatBounds = {
+      west,
+      east,
+      south,
+      north,
+    };
+    await load(center.lat, center.lon, tileZoom, lonLatBounds);
+  };
+
+  const setView = (view: TerrainView) => {
+    if (lastView && viewsEqual(lastView, view)) return;
+    lastView = {
+      centerX: view.centerX,
+      centerY: view.centerY,
+      zoom: view.zoom,
+      bounds: { ...view.bounds },
+    };
+    pendingView = lastView;
+    if (viewDebounceId !== null) {
+      window.clearTimeout(viewDebounceId);
+    }
+    viewDebounceId = window.setTimeout(() => {
+      viewDebounceId = null;
+      if (!pendingView) return;
+      const next = pendingView;
+      pendingView = null;
+      void applyView(next);
+    }, 150);
+  };
+
+  void load(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
 
   gl.enable(gl.DEPTH_TEST);
   gl.disable(gl.CULL_FACE);
@@ -1167,6 +1307,10 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
         cancelAnimationFrame(animationId);
         animationId = null;
       }
+      if (viewDebounceId !== null) {
+        window.clearTimeout(viewDebounceId);
+        viewDebounceId = null;
+      }
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
@@ -1184,5 +1328,6 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
       gl.deleteProgram(program);
     },
     resize,
+    setView,
   };
 }

@@ -85,10 +85,11 @@ if (cubeCanvas) {
   window.addEventListener("resize", cube.resize);
 }
 
+let terrainPreview: ReturnType<typeof startTerrainPreview> | null = null;
 const terrainCanvas = document.getElementById("terrain-canvas") as HTMLCanvasElement | null;
 if (terrainCanvas) {
-  const terrain = startTerrainPreview(terrainCanvas);
-  window.addEventListener("resize", terrain.resize);
+  terrainPreview = startTerrainPreview(terrainCanvas);
+  window.addEventListener("resize", terrainPreview.resize);
 }
 
 // Create immediate mode draw context
@@ -2199,6 +2200,14 @@ tessera.render = function () {
   const activePane = paneStates.get(activePaneId);
   const activeRect = layoutCache.rects.get(activePaneId);
   if (activePane && activeRect) {
+    const activeBounds = activePane.camera.getVisibleBounds(activeRect.width, activeRect.height);
+    terrainPreview?.setView({
+      centerX: activePane.camera.centerX,
+      centerY: activePane.camera.centerY,
+      zoom: activePane.camera.zoom,
+      bounds: activeBounds,
+    });
+
     const minimapW = MINIMAP_WIDTH * uiScale;
     const minimapH = MINIMAP_HEIGHT * uiScale;
     const minimapPad = MINIMAP_PADDING * uiScale;
@@ -2226,7 +2235,6 @@ tessera.render = function () {
     const minimapScreenMatrix = getScreenMatrix(minimapW, minimapH);
 
     // Transform active pane bounds to minimap screen space
-    const activeBounds = activePane.camera.getVisibleBounds(activeRect.width, activeRect.height);
     const topLeft = worldToScreen(activeBounds.left, activeBounds.top, minimapMatrix, minimapW, minimapH);
     const bottomRight = worldToScreen(activeBounds.right, activeBounds.bottom, minimapMatrix, minimapW, minimapH);
 
