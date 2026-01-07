@@ -3,6 +3,7 @@
  */
 
 import { TILE_SIZE } from "./constants";
+import { getViewMetrics } from "./view";
 
 export interface TileCoord {
   z: number;
@@ -93,9 +94,11 @@ export class TileManager {
 
     // View size in world coordinates (0-1 range)
     // At zoom N, world is TILE_SIZE * 2^N pixels
-    const worldSizeInPixels = TileManager.TILE_SIZE * Math.pow(2, zoom);
-    const viewWidth = viewportWidth / worldSizeInPixels;
-    const viewHeight = viewportHeight / worldSizeInPixels;
+    const { viewWidth, viewHeight } = getViewMetrics(
+      zoom,
+      viewportWidth,
+      viewportHeight
+    );
 
     // View bounds in world coordinates
     const left = centerX - viewWidth / 2;

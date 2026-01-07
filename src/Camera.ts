@@ -3,6 +3,7 @@
  */
 
 import { TILE_SIZE } from "./constants";
+import { getViewBounds, getViewMetrics } from "./view";
 import { type Mat3, multiply, translate, scale } from "./math/mat3";
 
 export class Camera {
@@ -30,12 +31,11 @@ export class Camera {
   getMatrix(viewportWidth: number, viewportHeight: number): Mat3 {
     // At zoom N, the world is TILE_SIZE * 2^N pixels wide
     // We want tiles to render at their native pixel size
-    const worldSizeInPixels = Camera.TILE_SIZE * Math.pow(2, this.zoom);
-
-    // View size in world coordinates (0-1 range)
-    // viewWidth in world = viewportWidth / worldSizeInPixels
-    const viewWidth = viewportWidth / worldSizeInPixels;
-    const viewHeight = viewportHeight / worldSizeInPixels;
+    const { viewWidth, viewHeight } = getViewMetrics(
+      this.zoom,
+      viewportWidth,
+      viewportHeight
+    );
 
     // Build matrix: scale * translate
     // 1. Translate so camera center is at origin
@@ -51,9 +51,11 @@ export class Camera {
 
   /** Pan the camera by screen pixels */
   pan(dx: number, dy: number, viewportWidth: number, viewportHeight: number): void {
-    const worldSizeInPixels = Camera.TILE_SIZE * Math.pow(2, this.zoom);
-    const viewWidth = viewportWidth / worldSizeInPixels;
-    const viewHeight = viewportHeight / worldSizeInPixels;
+    const { viewWidth, viewHeight } = getViewMetrics(
+      this.zoom,
+      viewportWidth,
+      viewportHeight
+    );
 
     // Convert pixel delta to world delta
     this.centerX -= (dx / viewportWidth) * viewWidth;
@@ -77,14 +79,12 @@ export class Camera {
     const sy = screenY / viewportHeight;
 
     // Old view dimensions in world coordinates
-    const oldWorldSizeInPixels = Camera.TILE_SIZE * Math.pow(2, oldZoom);
-    const oldViewWidth = viewportWidth / oldWorldSizeInPixels;
-    const oldViewHeight = viewportHeight / oldWorldSizeInPixels;
+    const { viewWidth: oldViewWidth, viewHeight: oldViewHeight } =
+      getViewMetrics(oldZoom, viewportWidth, viewportHeight);
 
     // New view dimensions in world coordinates
-    const newWorldSizeInPixels = Camera.TILE_SIZE * Math.pow(2, this.zoom);
-    const newViewWidth = viewportWidth / newWorldSizeInPixels;
-    const newViewHeight = viewportHeight / newWorldSizeInPixels;
+    const { viewWidth: newViewWidth, viewHeight: newViewHeight } =
+      getViewMetrics(this.zoom, viewportWidth, viewportHeight);
 
     // World position under cursor (old)
     const worldX = this.centerX + (sx - 0.5) * oldViewWidth;
@@ -107,16 +107,13 @@ export class Camera {
     top: number;
     bottom: number;
   } {
-    const worldSizeInPixels = Camera.TILE_SIZE * Math.pow(2, this.zoom);
-    const viewWidth = viewportWidth / worldSizeInPixels;
-    const viewHeight = viewportHeight / worldSizeInPixels;
+    const { viewWidth, viewHeight } = getViewMetrics(
+      this.zoom,
+      viewportWidth,
+      viewportHeight
+    );
 
-    return {
-      left: this.centerX - viewWidth / 2,
-      right: this.centerX + viewWidth / 2,
-      top: this.centerY - viewHeight / 2,
-      bottom: this.centerY + viewHeight / 2,
-    };
+    return getViewBounds(this.centerX, this.centerY, viewWidth, viewHeight);
   }
 
   /**

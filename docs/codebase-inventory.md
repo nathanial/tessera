@@ -31,60 +31,19 @@ Date: 2026-01-07
 
 ## Findings: cleanup/refactor/duplication
 
-### 1) Duplicated geometry logic
-
-- **Extrusion duplication**: `src/geometry/extrude.ts` and `src/immediate/PathBuilder.ts` both implement very similar polyline extrusion logic (normals, miters, caps). This risks divergence and bugs. Consider extracting a shared helper (e.g., `src/geometry/extrudePolyline.ts`) and reuse in both places.
-- **Tessellation duplication**: `PathBuilder.tessellate()` re-implements earcut flattening and merging logic already present in `src/geometry/tessellate.ts`. Consider reusing `tessellatePolygon()` for each subpath or moving a shared “merge tessellations” helper into `src/geometry/`.
-
-### 2) Shader/program setup repeated across renderers
-
-Multiple renderers compile the same shaders and repeat uniform/attribute lookups:
-- `src/FeatureRenderer.ts`, `src/batch/BatchRenderer.ts`, `src/immediate/FillRenderer.ts`, `src/immediate/StrokeRenderer.ts`, `src/Tessera.ts`, `src/instanced/InstancedPointRenderer.ts`, `src/sdf/SDFRenderer.ts`.
-
-Consider a shared `ProgramCache` or `ShaderBundle` utility to:
-- Compile once per `WebGL2RenderingContext`.
-- Centralize uniform/attrib location caching.
-- Reduce boilerplate and risk of mismatched names.
-
-### 3) Type duplication + cross-module coupling
-
-- `Color` is defined in multiple places: `src/FeatureRenderer.ts`, `src/immediate/DrawState.ts`, `src/ui/UITheme.ts`, and is imported from `FeatureRenderer` inside `src/style/types.ts` and `src/sdf/types.ts`. This creates unnecessary coupling and a circular type dependency (`FeatureRenderer` ⇄ `style`).
-- `LineCap`/`LineJoin` exist in `DrawState` while similar `CapStyle`/`JoinStyle` exist in `src/geometry/types.ts`.
-
-Suggestion: create a small `src/types/` module (e.g., `src/types/color.ts`, `src/types/geojson.ts`, `src/types/line.ts`) and have all systems share those base types.
-
-### 4) Unused or partially-implemented API surface
+### 1) Unused or partially-implemented API surface
 
 - `ExtrudeOptions.join` and `JoinStyle` in `src/geometry/types.ts` are defined but not used in `src/geometry/extrude.ts`.
 - `DrawState.lineJoin` is tracked but never influences stroke geometry (`PathBuilder.extrude()` only supports miter joins).
 
 Recommendation: either implement join styles or remove the unused options to avoid misleading API.
 
-### 5) Shared constants duplicated
-
-- Tile size constant exists in both `src/Camera.ts` and `src/TileManager.ts` (`TILE_SIZE = 512`).
-- View-size math is repeated in `Camera.getMatrix()`, `Camera.getVisibleBounds()`, and `TileManager.getVisibleTiles()`.
-
-Recommendation: move tile-size and view-math helpers into a shared module to prevent drift.
-
-### 6) Rendering loop duplication
-
-- `Tessera.render()` and `Tessera.renderTiles()` repeat very similar tile render code. Consider extracting a shared private helper with a small surface area for debug logging, and reuse in both methods.
-
-### 7) Debug logging in production path
+### 2) Debug logging in production path
 
 - `src/Tessera.ts` logs per-second frame stats and tile details with `console.log()`. If this is not intended for library consumers, gate behind a debug flag or injectable logger.
 - `src/TileManager.ts` logs `console.error()` on load failure; consider routing errors to a callback for downstream handling.
 
-### 8) Instanced point renderer inefficiency
-
-- `src/instanced/InstancedPointRenderer.ts` calls `createShapeGeometry()` twice in `setInstances()` and re-runs VAO setup even when shape is unchanged. Cache the geometry result and reuse it.
-
-### 9) UI widget interaction logic repeated
-
-- Widgets like `Button`, `ToggleButton`, `Scrollbar`, and `TabArea` each hand-roll hover/active logic and hit tests. Consider extracting a small shared helper (e.g., `usePressable`, `useHover`, `hitTest`) to reduce repetition and unify behavior.
-
-### 10) Dev/demo code separation
+### 3) Dev/demo code separation
 
 - `dev/` contains a large amount of prototype logic and utilities (selection, labels, sensor cones, spatial grids, etc.). Decide whether these are:
   - part of the library (move into `src/`), or
