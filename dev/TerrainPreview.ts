@@ -26,6 +26,13 @@ void main() {
 const WGS84_A = 6378137.0;
 const WGS84_E2 = 0.00669437999014;
 const QUANTIZED_MAX = 32767;
+const TILE_RANGE = 1;
+const MAX_TOTAL_VERTICES = 4000000;
+const ORBIT_SPEED = 0.005;
+const PAN_SPEED = 1.0;
+const MIN_ELEVATION = -1.2;
+const MAX_ELEVATION = 1.2;
+const FOV = Math.PI / 3.5;
 
 interface TerrainLayer {
   tiles: string[];
@@ -39,6 +46,11 @@ interface TerrainMesh {
   normals: Float32Array;
   indices: Uint32Array;
   radius: number;
+}
+
+interface DecodedTile {
+  positions: Float32Array<ArrayBuffer>;
+  indices: Uint32Array<ArrayBuffer>;
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -99,7 +111,7 @@ function decodeZigZag(value: number): number {
   return (value >> 1) ^ (-(value & 1));
 }
 
-function decodeDeltaArray(view: DataView, offset: number, count: number): { values: Uint32Array; offset: number } {
+function decodeDeltaArray(view: DataView, offset: number, count: number): { values: Uint32Array<ArrayBuffer>; offset: number } {
   const values = new Uint32Array(count);
   let accum = 0;
   for (let i = 0; i < count; i++) {
@@ -112,7 +124,7 @@ function decodeDeltaArray(view: DataView, offset: number, count: number): { valu
   return { values, offset };
 }
 
-function decodeIndices(view: DataView, offset: number, count: number): { indices: Uint32Array; offset: number } {
+function decodeIndices(view: DataView, offset: number, count: number): { indices: Uint32Array<ArrayBuffer>; offset: number } {
   const indices = new Uint32Array(count);
   let highest = 0;
   for (let i = 0; i < count; i++) {
@@ -127,43 +139,129 @@ function decodeIndices(view: DataView, offset: number, count: number): { indices
   return { indices, offset };
 }
 
-function lonLatToTileXY(lon: number, lat: number, zoom: number, projection: string, scheme: "tms" | "xyz"): { x: number; y: number } {
+function decodeEdgeIndices(view: DataView, offset: number): { indices: Uint32Array<ArrayBuffer>; offset: number } {
+  if (offset + 4 > view.byteLength) {
+    return { indices: new Uint32Array(0), offset };
+  }
+  const length = view.getUint32(offset, true);
+  offset += 4;
+  const indices = new Uint32Array(length);
+  for (let i = 0; i < length; i++) {
+    if (offset + 2 > view.byteLength) break;
+    indices[i] = view.getUint16(offset, true);
+    offset += 2;
+  }
+  return { indices, offset };
+}
+
+function tileCounts(projection: string, zoom: number): { xTiles: number; yTiles: number } {
+  if (projection === "EPSG:4326") {
+    return { xTiles: 1 << (zoom + 1), yTiles: 1 << zoom };
+  }
   const tiles = 1 << zoom;
+  return { xTiles: tiles, yTiles: tiles };
+}
+
+function mercatorToLonLat(mercX: number, mercY: number): { lonDeg: number; latDeg: number } {
+  const lonRad = mercX / WGS84_A;
+  const latRad = 2 * Math.atan(Math.exp(mercY / WGS84_A)) - Math.PI / 2;
+  return {
+    lonDeg: (lonRad * 180) / Math.PI,
+    latDeg: (latRad * 180) / Math.PI,
+  };
+}
+
+function parseQuantizedMesh(view: DataView): {
+  u: Uint32Array<ArrayBuffer>;
+  v: Uint32Array<ArrayBuffer>;
+  h: Uint32Array<ArrayBuffer>;
+  indices: Uint32Array<ArrayBuffer>;
+  westIndices: Uint32Array<ArrayBuffer>;
+  southIndices: Uint32Array<ArrayBuffer>;
+  eastIndices: Uint32Array<ArrayBuffer>;
+  northIndices: Uint32Array<ArrayBuffer>;
+  minHeight: number;
+  maxHeight: number;
+  vertexCount: number;
+} {
+  let offset = 0;
+  offset += 3 * 8; // skip tile center
+  const minHeight = view.getFloat32(offset, true); offset += 4;
+  const maxHeight = view.getFloat32(offset, true); offset += 4;
+  offset += 4 * 8; // skip bounding sphere center (3 doubles) + radius
+  offset += 3 * 8; // skip horizon occlusion point
+
+  const vertexCount = view.getUint32(offset, true); offset += 4;
+  if (vertexCount <= 0 || vertexCount > 500000) {
+    throw new Error(`Unexpected vertex count (${vertexCount})`);
+  }
+
+  const uData = decodeDeltaArray(view, offset, vertexCount);
+  const vData = decodeDeltaArray(view, uData.offset, vertexCount);
+  const hData = decodeDeltaArray(view, vData.offset, vertexCount);
+  offset = hData.offset;
+
+  const triangleCount = view.getUint32(offset, true); offset += 4;
+  const indexCount = triangleCount * 3;
+  const indexData = decodeIndices(view, offset, indexCount);
+  offset = indexData.offset;
+  const westEdge = decodeEdgeIndices(view, offset);
+  offset = westEdge.offset;
+  const southEdge = decodeEdgeIndices(view, offset);
+  offset = southEdge.offset;
+  const eastEdge = decodeEdgeIndices(view, offset);
+  offset = eastEdge.offset;
+  const northEdge = decodeEdgeIndices(view, offset);
+
+  return {
+    u: uData.values,
+    v: vData.values,
+    h: hData.values,
+    indices: indexData.indices,
+    westIndices: westEdge.indices,
+    southIndices: southEdge.indices,
+    eastIndices: eastEdge.indices,
+    northIndices: northEdge.indices,
+    minHeight,
+    maxHeight,
+    vertexCount,
+  };
+}
+
+function lonLatToTileXY(lon: number, lat: number, zoom: number, projection: string, scheme: "tms" | "xyz"): { x: number; y: number } {
+  const { xTiles, yTiles } = tileCounts(projection, zoom);
   if (projection === "EPSG:3857") {
-    const x = Math.floor(((lon + 180) / 360) * tiles);
+    const x = Math.floor(((lon + 180) / 360) * xTiles);
     const latRad = (lat * Math.PI) / 180;
     const merc = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
-    const yRaw = Math.floor((1 - merc / Math.PI) / 2 * tiles);
-    const y = scheme === "tms" ? tiles - 1 - yRaw : yRaw;
+    const yRaw = Math.floor((1 - merc / Math.PI) / 2 * yTiles);
+    const y = scheme === "tms" ? yTiles - 1 - yRaw : yRaw;
     return { x, y };
   }
 
-  const tileWidth = 360 / tiles;
-  const tileHeight = 180 / tiles;
+  const tileWidth = 360 / xTiles;
+  const tileHeight = 180 / yTiles;
   const x = Math.floor((lon + 180) / tileWidth);
   const yRaw = Math.floor((90 - lat) / tileHeight);
-  const y = scheme === "tms" ? tiles - 1 - yRaw : yRaw;
+  const y = scheme === "tms" ? yTiles - 1 - yRaw : yRaw;
   return { x, y };
 }
 
 function tileBounds(x: number, y: number, zoom: number, projection: string, scheme: "tms" | "xyz") {
-  const tiles = 1 << zoom;
-  const yForBounds = scheme === "tms" ? tiles - 1 - y : y;
+  const { xTiles, yTiles } = tileCounts(projection, zoom);
+  const yForBounds = scheme === "tms" ? yTiles - 1 - y : y;
 
   if (projection === "EPSG:3857") {
-    const west = (x / tiles) * 360 - 180;
-    const east = ((x + 1) / tiles) * 360 - 180;
-
-    const northRad = Math.PI - (2 * Math.PI * yForBounds) / tiles;
-    const southRad = Math.PI - (2 * Math.PI * (yForBounds + 1)) / tiles;
-    const north = (Math.atan(Math.sinh(northRad)) * 180) / Math.PI;
-    const south = (Math.atan(Math.sinh(southRad)) * 180) / Math.PI;
-
+    const worldSpan = 2 * Math.PI * WGS84_A;
+    const west = -Math.PI * WGS84_A + (x / xTiles) * worldSpan;
+    const east = -Math.PI * WGS84_A + ((x + 1) / xTiles) * worldSpan;
+    const north = Math.PI * WGS84_A - (yForBounds / yTiles) * worldSpan;
+    const south = Math.PI * WGS84_A - ((yForBounds + 1) / yTiles) * worldSpan;
     return { west, east, south, north };
   }
 
-  const tileWidth = 360 / tiles;
-  const tileHeight = 180 / tiles;
+  const tileWidth = 360 / xTiles;
+  const tileHeight = 180 / yTiles;
   const west = -180 + x * tileWidth;
   const east = west + tileWidth;
   const north = 90 - yForBounds * tileHeight;
@@ -270,14 +368,8 @@ function computeNormals(positions: Float32Array, indices: Uint32Array): Float32A
   return normals;
 }
 
-async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: number): Promise<TerrainMesh> {
-  const layer = await fetchIonLayer(token);
-  const scheme = layer.scheme ?? "tms";
-  const projection = layer.projection ?? "EPSG:4326";
-
-  const { x, y } = lonLatToTileXY(lon, lat, zoom, projection, scheme);
+function resolveTileUrl(layer: TerrainLayer & { baseUrl: string; accessToken: string }, x: number, y: number, zoom: number): string {
   const tileTemplate = layer.tiles[0] ?? "";
-
   const resolvedTemplate = tileTemplate
     .replace("{z}", `${zoom}`)
     .replace("{x}", `${x}`)
@@ -286,72 +378,196 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
     .replace("{ext}", "terrain");
   const baseUrl = new URL(layer.baseUrl);
   const resolvedUrl = new URL(resolvedTemplate, baseUrl).toString();
-  const tileUrl = appendAccessToken(resolvedUrl, layer.accessToken);
+  return appendAccessToken(resolvedUrl, layer.accessToken);
+}
 
-  const response = await fetch(tileUrl);
-  if (!response.ok) {
-    throw new Error("Failed to fetch terrain tile");
+async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: number): Promise<TerrainMesh> {
+  const layer = await fetchIonLayer(token);
+  const scheme = layer.scheme ?? "tms";
+  const projection = layer.projection ?? "EPSG:4326";
+
+  const { xTiles, yTiles } = tileCounts(projection, zoom);
+  const { x: centerTileX, y: centerTileY } = lonLatToTileXY(lon, lat, zoom, projection, scheme);
+  const centerBounds = tileBounds(centerTileX, centerTileY, zoom, projection, scheme);
+  let centerLon = 0;
+  let centerLat = 0;
+  if (projection === "EPSG:3857") {
+    const centerMercX = (centerBounds.west + centerBounds.east) / 2;
+    const centerMercY = (centerBounds.south + centerBounds.north) / 2;
+    const center = mercatorToLonLat(centerMercX, centerMercY);
+    centerLon = center.lonDeg;
+    centerLat = center.latDeg;
+  } else {
+    centerLon = (centerBounds.west + centerBounds.east) / 2;
+    centerLat = (centerBounds.south + centerBounds.north) / 2;
   }
-  const buffer = await response.arrayBuffer();
-  const view = new DataView(buffer);
-
-  let offset = 0;
-  const tileCenterX = view.getFloat64(offset, true); offset += 8;
-  const tileCenterY = view.getFloat64(offset, true); offset += 8;
-  const tileCenterZ = view.getFloat64(offset, true); offset += 8;
-  const minHeight = view.getFloat32(offset, true); offset += 4;
-  const maxHeight = view.getFloat32(offset, true); offset += 4;
-  offset += 4 * 8; // skip bounding sphere center (3 doubles) + radius
-  offset += 3 * 8; // skip horizon occlusion point
-
-  const vertexCount = view.getUint32(offset, true); offset += 4;
-  if (vertexCount <= 0 || vertexCount > 500000) {
-    throw new Error(`Unexpected vertex count (${vertexCount})`);
-  }
-  const uData = decodeDeltaArray(view, offset, vertexCount);
-  const vData = decodeDeltaArray(view, uData.offset, vertexCount);
-  const hData = decodeDeltaArray(view, vData.offset, vertexCount);
-  offset = hData.offset;
-
-  const indexCount = view.getUint32(offset, true); offset += 4;
-  const indexData = decodeIndices(view, offset, indexCount);
-
-  const bounds = tileBounds(x, y, zoom, projection, scheme);
-  const centerLon = (bounds.west + bounds.east) / 2;
-  const centerLat = (bounds.south + bounds.north) / 2;
   const centerECEF = lonLatHeightToECEF(centerLon, centerLat, 0);
   const refLon = (centerLon * Math.PI) / 180;
   const refLat = (centerLat * Math.PI) / 180;
 
-  const positions = new Float32Array(vertexCount * 3);
-  const heightRange = maxHeight - minHeight;
+  const tileCoords: { x: number; y: number }[] = [];
+  for (let dy = -TILE_RANGE; dy <= TILE_RANGE; dy++) {
+    const y = centerTileY + dy;
+    if (y < 0 || y >= yTiles) continue;
+    for (let dx = -TILE_RANGE; dx <= TILE_RANGE; dx++) {
+      const x = ((centerTileX + dx) % xTiles + xTiles) % xTiles;
+      tileCoords.push({ x, y });
+    }
+  }
+
   const heightScale = 1.3;
   const scale = 1 / 1000;
 
-  for (let i = 0; i < vertexCount; i++) {
-    const u = (uData.values[i] ?? 0) / QUANTIZED_MAX;
-    const v = (vData.values[i] ?? 0) / QUANTIZED_MAX;
-    const h = (hData.values[i] ?? 0) / QUANTIZED_MAX;
+  const tileMeshes: Array<DecodedTile | null> = await Promise.all(tileCoords.map(async (coord) => {
+    try {
+      const tileUrl = resolveTileUrl(layer, coord.x, coord.y, zoom);
+      const response = await fetch(tileUrl);
+      if (!response.ok) return null;
+      const buffer = await response.arrayBuffer();
+      const view = new DataView(buffer);
+      const decoded = parseQuantizedMesh(view);
+      const bounds = tileBounds(coord.x, coord.y, zoom, projection, scheme);
+      const westFallback: number[] = [];
+      const eastFallback: number[] = [];
+      const southFallback: number[] = [];
+      const northFallback: number[] = [];
+      if (
+        decoded.westIndices.length === 0 ||
+        decoded.eastIndices.length === 0 ||
+        decoded.southIndices.length === 0 ||
+        decoded.northIndices.length === 0
+      ) {
+        for (let i = 0; i < decoded.vertexCount; i++) {
+          const u = decoded.u[i] ?? 0;
+          const v = decoded.v[i] ?? 0;
+          if (u === 0) westFallback.push(i);
+          if (u === QUANTIZED_MAX) eastFallback.push(i);
+          if (v === 0) southFallback.push(i);
+          if (v === QUANTIZED_MAX) northFallback.push(i);
+        }
+        westFallback.sort((a, b) => (decoded.v[a] ?? 0) - (decoded.v[b] ?? 0));
+        eastFallback.sort((a, b) => (decoded.v[a] ?? 0) - (decoded.v[b] ?? 0));
+        southFallback.sort((a, b) => (decoded.u[a] ?? 0) - (decoded.u[b] ?? 0));
+        northFallback.sort((a, b) => (decoded.u[a] ?? 0) - (decoded.u[b] ?? 0));
+      }
+      const west = decoded.westIndices.length > 0 ? decoded.westIndices : westFallback;
+      const east = decoded.eastIndices.length > 0 ? decoded.eastIndices : eastFallback;
+      const south = decoded.southIndices.length > 0 ? decoded.southIndices : southFallback;
+      const north = decoded.northIndices.length > 0 ? decoded.northIndices : northFallback;
 
-    const lonDeg = bounds.west + u * (bounds.east - bounds.west);
-    const latDeg = bounds.south + v * (bounds.north - bounds.south);
-    const height = minHeight + h * heightRange * heightScale;
+      const skirtVertexCount = west.length + east.length + south.length + north.length;
+      const skirtIndexCount =
+        Math.max(0, west.length - 1) * 6 +
+        Math.max(0, east.length - 1) * 6 +
+        Math.max(0, south.length - 1) * 6 +
+        Math.max(0, north.length - 1) * 6;
+      const positions = new Float32Array((decoded.vertexCount + skirtVertexCount) * 3);
+      const heightRange = decoded.maxHeight - decoded.minHeight;
+      const skirtHeight = Math.max(30, heightRange * 0.1);
+      const skirtDepth = skirtHeight * scale;
 
-    const [xEcef, yEcef, zEcef] = lonLatHeightToECEF(lonDeg, latDeg, height);
-    const [east, north, up] = ecefToEnu(
-      xEcef,
-      yEcef,
-      zEcef,
-      refLon,
-      refLat,
-      centerECEF[0],
-      centerECEF[1],
-      centerECEF[2]
-    );
+      for (let i = 0; i < decoded.vertexCount; i++) {
+        const u = (decoded.u[i] ?? 0) / QUANTIZED_MAX;
+        const v = (decoded.v[i] ?? 0) / QUANTIZED_MAX;
+        const h = (decoded.h[i] ?? 0) / QUANTIZED_MAX;
 
-    positions[i * 3] = east * scale;
-    positions[i * 3 + 1] = north * scale;
-    positions[i * 3 + 2] = up * scale;
+        let lonDeg = 0;
+        let latDeg = 0;
+        if (projection === "EPSG:3857") {
+          const mercX = bounds.west + u * (bounds.east - bounds.west);
+          const mercY = bounds.south + v * (bounds.north - bounds.south);
+          const lonLat = mercatorToLonLat(mercX, mercY);
+          lonDeg = lonLat.lonDeg;
+          latDeg = lonLat.latDeg;
+        } else {
+          lonDeg = bounds.west + u * (bounds.east - bounds.west);
+          latDeg = bounds.south + v * (bounds.north - bounds.south);
+        }
+        const height = decoded.minHeight + h * heightRange * heightScale;
+
+        const [xEcef, yEcef, zEcef] = lonLatHeightToECEF(lonDeg, latDeg, height);
+        const [east, north, up] = ecefToEnu(
+          xEcef,
+          yEcef,
+          zEcef,
+          refLon,
+          refLat,
+          centerECEF[0],
+          centerECEF[1],
+          centerECEF[2]
+        );
+
+        positions[i * 3] = east * scale;
+        positions[i * 3 + 1] = north * scale;
+        positions[i * 3 + 2] = up * scale;
+      }
+
+      const indices = new Uint32Array(decoded.indices.length + skirtIndexCount);
+      indices.set(decoded.indices, 0);
+      let indexOffset = decoded.indices.length;
+
+      let skirtOffset = decoded.vertexCount;
+      const addSkirt = (edge: ArrayLike<number>) => {
+        if (edge.length < 2) return;
+        const skirtIndices = new Uint32Array(edge.length);
+        for (let i = 0; i < edge.length; i++) {
+          const base = edge[i] ?? 0;
+          const baseOffset = base * 3;
+          const skirtIndex = skirtOffset++;
+          skirtIndices[i] = skirtIndex;
+          const skirtBase = skirtIndex * 3;
+          positions[skirtBase] = positions[baseOffset] ?? 0;
+          positions[skirtBase + 1] = positions[baseOffset + 1] ?? 0;
+          positions[skirtBase + 2] = (positions[baseOffset + 2] ?? 0) - skirtDepth;
+        }
+        for (let i = 0; i < edge.length - 1; i++) {
+          const v0 = edge[i] ?? 0;
+          const v1 = edge[i + 1] ?? 0;
+          const s0 = skirtIndices[i] ?? 0;
+          const s1 = skirtIndices[i + 1] ?? 0;
+          indices[indexOffset++] = v0;
+          indices[indexOffset++] = v1;
+          indices[indexOffset++] = s0;
+          indices[indexOffset++] = v1;
+          indices[indexOffset++] = s1;
+          indices[indexOffset++] = s0;
+        }
+      };
+
+      addSkirt(west);
+      addSkirt(south);
+      addSkirt(east);
+      addSkirt(north);
+
+      return { positions, indices } satisfies DecodedTile;
+    } catch {
+      return null;
+    }
+  }));
+
+  const validTiles = tileMeshes.filter((tile): tile is NonNullable<typeof tile> => tile !== null);
+  if (validTiles.length === 0) {
+    throw new Error("Failed to fetch terrain tiles");
+  }
+
+  const totalVertices = validTiles.reduce((sum, tile) => sum + tile.positions.length / 3, 0);
+  if (totalVertices > MAX_TOTAL_VERTICES) {
+    throw new Error(`Terrain preview too large (${totalVertices} vertices)`);
+  }
+
+  const totalIndices = validTiles.reduce((sum, tile) => sum + tile.indices.length, 0);
+  const positions = new Float32Array(totalVertices * 3);
+  const indices = new Uint32Array(totalIndices);
+
+  let vertexOffset = 0;
+  let indexOffset = 0;
+  for (const tile of validTiles) {
+    positions.set(tile.positions, vertexOffset * 3);
+    for (let i = 0; i < tile.indices.length; i++) {
+      indices[indexOffset + i] = (tile.indices[i] ?? 0) + vertexOffset;
+    }
+    indexOffset += tile.indices.length;
+    vertexOffset += tile.positions.length / 3;
   }
 
   let minX = positions[0] ?? 0;
@@ -373,14 +589,14 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
     maxZ = Math.max(maxZ, zVal);
   }
 
-  const centerX = (minX + maxX) / 2;
-  const centerY = (minY + maxY) / 2;
-  const centerZ = (minZ + maxZ) / 2;
+  const meshCenterX = (minX + maxX) / 2;
+  const meshCenterY = (minY + maxY) / 2;
+  const meshCenterZ = (minZ + maxZ) / 2;
 
   for (let i = 0; i < positions.length; i += 3) {
-    positions[i] = (positions[i] ?? 0) - centerX;
-    positions[i + 1] = (positions[i + 1] ?? 0) - centerY;
-    positions[i + 2] = (positions[i + 2] ?? 0) - centerZ;
+    positions[i] = (positions[i] ?? 0) - meshCenterX;
+    positions[i + 1] = (positions[i + 1] ?? 0) - meshCenterY;
+    positions[i + 2] = (positions[i + 2] ?? 0) - meshCenterZ;
   }
 
   let radius = 0;
@@ -391,12 +607,12 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
     radius = Math.max(radius, Math.hypot(xVal, yVal, zVal));
   }
 
-  const normals = computeNormals(positions, indexData.indices);
+  const normals = computeNormals(positions, indices);
 
   return {
     positions,
     normals,
-    indices: indexData.indices,
+    indices,
     radius,
   };
 }
@@ -435,6 +651,10 @@ function mat4Perspective(fovRad: number, aspect: number, near: number, far: numb
   out[11] = -1;
   out[14] = (2 * far * near) * nf;
   return out;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function mat4LookAt(eye: [number, number, number], target: [number, number, number], up: [number, number, number]): Float32Array {
@@ -509,6 +729,16 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   let meshReady = false;
   let animationId: number | null = null;
   let showWireframe = true;
+  let azimuth = Math.PI;
+  let elevation = 0.6;
+  let distance = 1;
+  let minDistance = 0.1;
+  let maxDistance = 10;
+  let isDragging = false;
+  let dragMode: "orbit" | "pan" = "orbit";
+  let lastX = 0;
+  let lastY = 0;
+  const target: [number, number, number] = [0, 0, 0];
 
   const resize = () => {
     const dpr = window.devicePixelRatio || 1;
@@ -523,9 +753,12 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   };
 
   const load = async () => {
-    const mesh = await loadTerrainMesh(token, 46.8523, -121.7603, 8);
+    const mesh = await loadTerrainMesh(token, 37.7749, -122.4194, 10);
     indexCount = mesh.indices.length;
     meshRadius = Math.max(mesh.radius, 0.001);
+    distance = meshRadius * 1.8;
+    minDistance = meshRadius * 0.25;
+    maxDistance = meshRadius * 10;
     const needsUint32 = mesh.positions.length / 3 > 65535;
     indexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     const indexData = needsUint32 ? mesh.indices : new Uint16Array(mesh.indices);
@@ -577,6 +810,95 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   gl.disable(gl.CULL_FACE);
   gl.lineWidth(1);
 
+  canvas.style.touchAction = "none";
+  const getEye = (): [number, number, number] => {
+    const cosEl = Math.cos(elevation);
+    const sinEl = Math.sin(elevation);
+    const sinAz = Math.sin(azimuth);
+    const cosAz = Math.cos(azimuth);
+    return [
+      target[0] + distance * cosEl * sinAz,
+      target[1] + distance * cosEl * cosAz,
+      target[2] + distance * sinEl,
+    ];
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.button === 2 || event.shiftKey || event.ctrlKey || event.metaKey) {
+      dragMode = "pan";
+    } else {
+      dragMode = "orbit";
+    }
+    isDragging = true;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    canvas.setPointerCapture(event.pointerId);
+  };
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (!isDragging) return;
+    const dx = event.clientX - lastX;
+    const dy = event.clientY - lastY;
+    lastX = event.clientX;
+    lastY = event.clientY;
+
+    if (dragMode === "orbit") {
+      azimuth += dx * ORBIT_SPEED;
+      elevation = clamp(elevation + dy * ORBIT_SPEED, MIN_ELEVATION, MAX_ELEVATION);
+      return;
+    }
+
+    const eye = getEye();
+    const dir: [number, number, number] = [
+      target[0] - eye[0],
+      target[1] - eye[1],
+      target[2] - eye[2],
+    ];
+    const dirLen = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+    const dirNorm: [number, number, number] = [dir[0] / dirLen, dir[1] / dirLen, dir[2] / dirLen];
+    const up: [number, number, number] = [0, 0, 1];
+    const right: [number, number, number] = [
+      dirNorm[1] * up[2] - dirNorm[2] * up[1],
+      dirNorm[2] * up[0] - dirNorm[0] * up[2],
+      dirNorm[0] * up[1] - dirNorm[1] * up[0],
+    ];
+    const rightLen = Math.hypot(right[0], right[1], right[2]) || 1;
+    right[0] /= rightLen; right[1] /= rightLen; right[2] /= rightLen;
+    const upVec: [number, number, number] = [
+      right[1] * dirNorm[2] - right[2] * dirNorm[1],
+      right[2] * dirNorm[0] - right[0] * dirNorm[2],
+      right[0] * dirNorm[1] - right[1] * dirNorm[0],
+    ];
+
+    const pixelsToWorld = (distance * Math.tan(FOV / 2) * 2) / Math.max(1, canvas.height);
+    const panX = -dx * pixelsToWorld * PAN_SPEED;
+    const panY = dy * pixelsToWorld * PAN_SPEED;
+    target[0] += right[0] * panX + upVec[0] * panY;
+    target[1] += right[1] * panX + upVec[1] * panY;
+    target[2] += right[2] * panX + upVec[2] * panY;
+  };
+
+  const onPointerUp = (event: PointerEvent) => {
+    isDragging = false;
+    canvas.releasePointerCapture(event.pointerId);
+  };
+
+  const onWheel = (event: WheelEvent) => {
+    const zoom = Math.exp(event.deltaY * 0.001);
+    distance = clamp(distance * zoom, minDistance, maxDistance);
+  };
+
+  const onContextMenu = (event: MouseEvent) => {
+    event.preventDefault();
+  };
+
+  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerup", onPointerUp);
+  canvas.addEventListener("pointerleave", onPointerUp);
+  canvas.addEventListener("wheel", onWheel, { passive: true });
+  canvas.addEventListener("contextmenu", onContextMenu);
+
   window.addEventListener("keydown", (event) => {
     if (event.key.toLowerCase() === "w") {
       showWireframe = !showWireframe;
@@ -591,12 +913,11 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     if (meshReady) {
       const elapsed = time / 1000;
       const aspect = canvas.width / canvas.height;
-      const distance = meshRadius * 2.8;
       const near = Math.max(0.01, distance * 0.02);
-      const far = distance * 10;
-      const projection = mat4Perspective(Math.PI / 3.5, aspect, near, far);
-      const view = mat4LookAt([0, -distance, distance * 0.6], [0, 0, 0], [0, 0, 1]);
-      const model = mat4RotateZ(elapsed * 0.1);
+      const far = Math.max(distance * 10, meshRadius * 8);
+      const projection = mat4Perspective(FOV, aspect, near, far);
+      const view = mat4LookAt(getEye(), target, [0, 0, 1]);
+      const model = mat4Identity();
       const mvp = mat4Multiply(projection, mat4Multiply(view, model));
 
       gl.useProgram(program);
@@ -631,6 +952,12 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
         cancelAnimationFrame(animationId);
         animationId = null;
       }
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointerleave", onPointerUp);
+      canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("contextmenu", onContextMenu);
       gl.deleteBuffer(vbo);
       gl.deleteBuffer(nbo);
       gl.deleteBuffer(fillIbo);
