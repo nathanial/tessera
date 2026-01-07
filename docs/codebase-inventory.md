@@ -38,12 +38,7 @@ Date: 2026-01-07
 
 Recommendation: either implement join styles or remove the unused options to avoid misleading API.
 
-### 2) Debug logging in production path
-
-- `src/Tessera.ts` logs per-second frame stats and tile details with `console.log()`. If this is not intended for library consumers, gate behind a debug flag or injectable logger.
-- `src/TileManager.ts` logs `console.error()` on load failure; consider routing errors to a callback for downstream handling.
-
-### 3) Dev/demo code separation
+### 2) Dev/demo code separation
 
 - `dev/` contains a large amount of prototype logic and utilities (selection, labels, sensor cones, spatial grids, etc.). Decide whether these are:
   - part of the library (move into `src/`), or

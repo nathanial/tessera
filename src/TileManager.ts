@@ -255,7 +255,6 @@ export class TileManager {
 
       return texture;
     } catch (error) {
-      console.error(error);
       this.loading.delete(key);
       return null;
     }

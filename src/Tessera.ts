@@ -89,9 +89,6 @@ export class Tessera {
     this.needsRender = true;
   }
 
-  private frameCount = 0;
-  private lastDebugTime = 0;
-
   /** Render a single frame */
   render(): void {
     const gl = this.gl;
@@ -111,38 +108,7 @@ export class Tessera {
       height
     );
 
-    // Debug logging (once per second)
-    this.frameCount++;
-    const now = Date.now();
-    if (now - this.lastDebugTime > 1000) {
-      // Aggregate stats from all draw contexts
-      let totalBatches = 0;
-      let totalInstances = 0;
-      for (const ctx of this.drawContexts) {
-        const stats = ctx.getStats();
-        totalBatches += stats.batches;
-        totalInstances += stats.instances;
-      }
-      console.log(`[Tessera] frame=${this.frameCount}, tiles=${tiles.length}, batches=${totalBatches}, instances=${totalInstances}, zoom=${this.camera.zoom.toFixed(2)}, center=(${this.camera.centerX.toFixed(4)}, ${this.camera.centerY.toFixed(4)})`);
-      if (tiles.length > 0) {
-        const t = tiles[0]!;
-        console.log(`[Tessera] first tile: z=${t.z}, x=${t.x}, y=${t.y}`);
-      }
-      this.lastDebugTime = now;
-    }
-
-    const { loadedCount, fallbackCount } = this.renderTilesInternal(
-      this.camera,
-      width,
-      height,
-      tiles
-    );
-
-    if (now - this.lastDebugTime < 100 && (loadedCount > 0 || fallbackCount > 0)) {
-      console.log(
-        `[Tessera] rendered ${loadedCount} exact + ${fallbackCount} fallback / ${tiles.length} tiles`
-      );
-    }
+    this.renderTilesInternal(this.camera, width, height, tiles);
   }
 
   /**
@@ -166,7 +132,7 @@ export class Tessera {
     viewportWidth: number,
     viewportHeight: number,
     tiles: ReturnType<TileManager["getVisibleTiles"]>
-  ): { loadedCount: number; fallbackCount: number } {
+  ): void {
     const gl = this.gl;
 
     gl.useProgram(this.program);
@@ -183,9 +149,6 @@ export class Tessera {
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(this.uniforms.texture, 0);
 
-    let loadedCount = 0;
-    let fallbackCount = 0;
-
     for (const tile of tiles) {
       const result = this.tileManager.getTileWithFallback(tile.z, tile.x, tile.y);
       if (!result) {
@@ -193,10 +156,7 @@ export class Tessera {
         continue;
       }
 
-      if (result.isExact) {
-        loadedCount++;
-      } else {
-        fallbackCount++;
+      if (!result.isExact) {
         this.requestRender();
       }
 
@@ -208,8 +168,6 @@ export class Tessera {
     }
 
     this.quadGeometry.unbind();
-
-    return { loadedCount, fallbackCount };
   }
 
   /** Start the render loop */
