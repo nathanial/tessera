@@ -5,8 +5,8 @@
 export const terrainVertexShader = `#version 300 es
 precision highp float;
 
-in vec3 a_position;   // x, y, z (world coords with height)
-in vec2 a_texCoord;   // UV for raster tile sampling
+layout(location = 0) in vec3 a_position;   // x, y, z (world coords with height)
+layout(location = 1) in vec2 a_texCoord;   // UV for raster tile sampling
 
 uniform mat4 u_viewProjection;  // Camera view-projection matrix
 

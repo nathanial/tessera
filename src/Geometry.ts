@@ -69,8 +69,28 @@ export class Geometry {
     const bytesPerVertex = firstAttr.stride || (firstAttr.size * 4); // 4 bytes per float
     this.vertexCount = (options.vertices.byteLength / bytesPerVertex) | 0;
 
+
     // Create and populate index buffer if provided
     if (options.indices) {
+      // Validate indices are within vertex count
+      let maxIndex = 0;
+      for (let i = 0; i < options.indices.length; i++) {
+        const idx = options.indices[i]!;
+        if (idx > maxIndex) maxIndex = idx;
+      }
+      if (maxIndex >= this.vertexCount) {
+        // Log detailed error for debugging
+        console.error(`[Geometry] Invalid indices: maxIndex=${maxIndex} >= vertexCount=${this.vertexCount}, indexCount=${options.indices.length}, vertexBytes=${options.vertices.byteLength}, stride=${bytesPerVertex}`);
+        // Log first few bad indices
+        for (let i = 0; i < Math.min(options.indices.length, 20); i++) {
+          if (options.indices[i]! >= this.vertexCount) {
+            console.error(`  index[${i}] = ${options.indices[i]} (invalid)`);
+          }
+        }
+        // Throw to prevent creating invalid geometry - this helps identify the source
+        throw new Error(`Invalid geometry: indices reference vertices beyond buffer (maxIndex=${maxIndex}, vertexCount=${this.vertexCount})`);
+      }
+
       this.indexBuffer = new Buffer(gl, "element", options.usage ?? "static");
       this.indexBuffer.setData(options.indices);
       this.indexCount = options.indices.length;

@@ -119,12 +119,13 @@ export function parseQuantizedMesh(buffer: ArrayBuffer): TerrainTileData {
   offset += vertexCount * 2;
   decodeDelta(height);
 
-  // Align to 4-byte boundary for index data if using 32-bit indices
-  if (vertexCount > 65536) {
-    offset = Math.ceil(offset / 4) * 4;
+  // Align to 2-byte boundary if needed (vertexCount might be odd)
+  if (offset % 2 !== 0) {
+    offset += 1;
   }
 
-  // Read triangle count
+  // Read triangle count (requires reading from potentially unaligned position)
+  // Note: DataView handles unaligned reads safely
   const triangleCount = view.getUint32(offset, true);
   offset += 4;
 

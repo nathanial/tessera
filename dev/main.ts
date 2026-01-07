@@ -75,7 +75,10 @@ console.log(`Tessera v${VERSION}`);
 // ============================================
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
-const tessera = new Tessera({ canvas });
+const tessera = new Tessera({
+  canvas,
+  cesiumAccessToken: import.meta.env.VITE_CESIUM_TOKEN,
+});
 
 // Create immediate mode draw context
 const draw = tessera.createDrawContext();

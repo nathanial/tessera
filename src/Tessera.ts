@@ -68,7 +68,11 @@ export class Tessera {
 
     // Initialize terrain if access token provided
     if (options.cesiumAccessToken) {
-      this.terrainManager = new TerrainTileManager(options.cesiumAccessToken);
+      this.terrainManager = new TerrainTileManager(
+        options.cesiumAccessToken,
+        1, // default asset ID
+        () => this.requestRender() // callback when tiles load
+      );
       this.heightSampler = new HeightSampler(this.terrainManager);
       // Initialize terrain manager
       this.terrainManager.initialize().catch((err) => {
@@ -190,12 +194,8 @@ export class Tessera {
       if (meshData) {
         this.renderTerrainTile(meshData, coord);
       } else {
-        // Request terrain tile to load
-        this.terrainManager.getTile(coord).then((data) => {
-          if (data) {
-            this.requestRender();
-          }
-        });
+        // Request terrain tile to load (non-blocking, queued)
+        this.terrainManager.requestTile(coord);
       }
     }
   }
@@ -267,11 +267,8 @@ export class Tessera {
         if (meshData) {
           this.renderTerrainTile(meshData, coord);
         } else {
-          this.terrainManager.getTile(coord).then((data) => {
-            if (data) {
-              this.requestRender();
-            }
-          });
+          // Request terrain tile to load (non-blocking, queued)
+          this.terrainManager.requestTile(coord);
         }
       }
     } else {
