@@ -4,10 +4,13 @@ import type { Aircraft } from "./adsb";
 import { getAltitudeColor } from "./adsb";
 import { getWrappedX } from "./CoordinateUtils";
 
+const SKIRT_LIGHT_MIN = 0.6;
+
 const VERTEX_SHADER = `#version 300 es
 in vec3 a_position;
 in vec3 a_normal;
 in vec2 a_uv;
+in float a_skirt;
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform vec3 u_lightDir;
@@ -18,7 +21,9 @@ void main() {
   vec3 normal = normalize(mat3(u_model) * a_normal);
   float diff = max(dot(normal, normalize(-u_lightDir)), 0.0);
   float lighting = 0.5 + 0.5 * diff;
-  v_light = mix(1.0, lighting, u_lightMix);
+  float lit = mix(1.0, lighting, u_lightMix);
+  float skirtLight = max(lit, ${SKIRT_LIGHT_MIN});
+  v_light = mix(lit, skirtLight, a_skirt);
   v_uv = a_uv;
   gl_Position = u_mvp * vec4(a_position, 1.0);
 }
@@ -123,6 +128,7 @@ interface TerrainMesh {
   normals: Float32Array;
   indices: Uint32Array;
   tesseraCoords: Float32Array;
+  skirtMask: Float32Array;
   radius: number;
   reference: TerrainReference;
   offset: [number, number, number];
@@ -147,6 +153,8 @@ interface DecodedTile {
   positions: Float32Array<ArrayBuffer>;
   indices: Uint32Array<ArrayBuffer>;
   tesseraCoords: Float32Array<ArrayBuffer>;
+  skirtMask: Float32Array<ArrayBuffer>;
+  edgeIndices: Uint32Array<ArrayBuffer>;
 }
 
 interface TerrainReference {
@@ -831,6 +839,10 @@ async function loadTerrainMesh(
     }
   }
 
+  const tileKey = (x: number, y: number) => `${x},${y}`;
+  const tileSet = new Set(tileCoords.map((coord) => tileKey(coord.x, coord.y)));
+  const wrapTileX = (x: number) => ((x % xTiles) + xTiles) % xTiles;
+
   const heightScale = 1.3;
   const scale = 1 / 1000;
 
@@ -871,15 +883,41 @@ async function loadTerrainMesh(
       const south = decoded.southIndices.length > 0 ? decoded.southIndices : southFallback;
       const north = decoded.northIndices.length > 0 ? decoded.northIndices : northFallback;
 
-      const skirtVertexCount = west.length + east.length + south.length + north.length;
-      const skirtIndexCount =
-        Math.max(0, west.length - 1) * 6 +
-        Math.max(0, east.length - 1) * 6 +
-        Math.max(0, south.length - 1) * 6 +
-        Math.max(0, north.length - 1) * 6;
+      const westX = wrapTileX(coord.x - 1);
+      const eastX = wrapTileX(coord.x + 1);
+      const northY = scheme === "tms" ? coord.y + 1 : coord.y - 1;
+      const southY = scheme === "tms" ? coord.y - 1 : coord.y + 1;
+      const hasWest = tileSet.has(tileKey(westX, coord.y));
+      const hasEast = tileSet.has(tileKey(eastX, coord.y));
+      const hasNorth = northY >= 0 && northY < yTiles && tileSet.has(tileKey(coord.x, northY));
+      const hasSouth = southY >= 0 && southY < yTiles && tileSet.has(tileKey(coord.x, southY));
+
+      const edgeSet = new Set<number>();
+      for (const idx of west) edgeSet.add(idx);
+      for (const idx of east) edgeSet.add(idx);
+      for (const idx of south) edgeSet.add(idx);
+      for (const idx of north) edgeSet.add(idx);
+      const edgeIndices = new Uint32Array(edgeSet.size);
+      let edgeWrite = 0;
+      for (const idx of edgeSet) {
+        edgeIndices[edgeWrite++] = idx;
+      }
+
+      const skirtEdges: Array<ArrayLike<number>> = [];
+      if (!hasWest) skirtEdges.push(west);
+      if (!hasSouth) skirtEdges.push(south);
+      if (!hasEast) skirtEdges.push(east);
+      if (!hasNorth) skirtEdges.push(north);
+
+      const skirtVertexCount = skirtEdges.reduce((sum, edge) => sum + edge.length, 0);
+      const skirtIndexCount = skirtEdges.reduce(
+        (sum, edge) => sum + Math.max(0, edge.length - 1) * 6,
+        0
+      );
       const totalVertexCount = decoded.vertexCount + skirtVertexCount;
       const positions = new Float32Array(totalVertexCount * 3);
       const tesseraCoords = new Float32Array(totalVertexCount * 2);
+      const skirtMask = new Float32Array(totalVertexCount);
       const heightRange = decoded.maxHeight - decoded.minHeight;
       const skirtHeight = Math.max(30, heightRange * 0.1);
       const skirtDepth = skirtHeight * scale;
@@ -936,6 +974,7 @@ async function loadTerrainMesh(
           const baseOffset = base * 3;
           const skirtIndex = skirtOffset++;
           skirtIndices[i] = skirtIndex;
+          skirtMask[skirtIndex] = 1;
           const skirtBase = skirtIndex * 3;
           positions[skirtBase] = positions[baseOffset] ?? 0;
           positions[skirtBase + 1] = positions[baseOffset + 1] ?? 0;
@@ -959,12 +998,11 @@ async function loadTerrainMesh(
         }
       };
 
-      addSkirt(west);
-      addSkirt(south);
-      addSkirt(east);
-      addSkirt(north);
+      for (const edge of skirtEdges) {
+        addSkirt(edge);
+      }
 
-      return { positions, indices, tesseraCoords } satisfies DecodedTile;
+      return { positions, indices, tesseraCoords, skirtMask, edgeIndices } satisfies DecodedTile;
     } catch {
       return null;
     }
@@ -984,17 +1022,52 @@ async function loadTerrainMesh(
   const positions = new Float32Array(totalVertices * 3);
   const tesseraCoords = new Float32Array(totalVertices * 2);
   const indices = new Uint32Array(totalIndices);
+  const skirtMask = new Float32Array(totalVertices);
+  const edgeGroups = new Map<
+    string,
+    { sumX: number; sumY: number; sumZ: number; count: number; indices: number[] }
+  >();
 
   let vertexOffset = 0;
   let indexOffset = 0;
   for (const tile of validTiles) {
     positions.set(tile.positions, vertexOffset * 3);
     tesseraCoords.set(tile.tesseraCoords, vertexOffset * 2);
+    skirtMask.set(tile.skirtMask, vertexOffset);
     for (let i = 0; i < tile.indices.length; i++) {
       indices[indexOffset + i] = (tile.indices[i] ?? 0) + vertexOffset;
     }
+    for (let i = 0; i < tile.edgeIndices.length; i++) {
+      const localIndex = tile.edgeIndices[i] ?? 0;
+      const globalIndex = vertexOffset + localIndex;
+      const tessBase = globalIndex * 2;
+      const keyX = Math.round((tesseraCoords[tessBase] ?? 0) * 1e7);
+      const keyY = Math.round((tesseraCoords[tessBase + 1] ?? 0) * 1e7);
+      const key = `${keyX},${keyY}`;
+      const base = globalIndex * 3;
+      const entry = edgeGroups.get(key) ?? { sumX: 0, sumY: 0, sumZ: 0, count: 0, indices: [] };
+      entry.sumX += positions[base] ?? 0;
+      entry.sumY += positions[base + 1] ?? 0;
+      entry.sumZ += positions[base + 2] ?? 0;
+      entry.count += 1;
+      entry.indices.push(globalIndex);
+      edgeGroups.set(key, entry);
+    }
     indexOffset += tile.indices.length;
     vertexOffset += tile.positions.length / 3;
+  }
+
+  for (const entry of edgeGroups.values()) {
+    if (entry.count < 2) continue;
+    const avgX = entry.sumX / entry.count;
+    const avgY = entry.sumY / entry.count;
+    const avgZ = entry.sumZ / entry.count;
+    for (const idx of entry.indices) {
+      const base = idx * 3;
+      positions[base] = avgX;
+      positions[base + 1] = avgY;
+      positions[base + 2] = avgZ;
+    }
   }
 
   let minX = positions[0] ?? 0;
@@ -1035,6 +1108,14 @@ async function loadTerrainMesh(
   }
 
   const normals = computeNormals(positions, indices);
+  for (let i = 0; i < skirtMask.length; i++) {
+    if ((skirtMask[i] ?? 0) > 0) {
+      const base = i * 3;
+      normals[base] = 0;
+      normals[base + 1] = 0;
+      normals[base + 2] = 1;
+    }
+  }
 
   const reference: TerrainReference = {
     lon: centerLon,
@@ -1050,6 +1131,7 @@ async function loadTerrainMesh(
     normals,
     indices,
     tesseraCoords,
+    skirtMask,
     radius,
     reference,
     offset,
@@ -1161,6 +1243,7 @@ export function startTerrainPreview(
   const positionLoc = gl.getAttribLocation(program, "a_position");
   const normalLoc = gl.getAttribLocation(program, "a_normal");
   const uvLoc = gl.getAttribLocation(program, "a_uv");
+  const skirtLoc = gl.getAttribLocation(program, "a_skirt");
   const mvpLoc = gl.getUniformLocation(program, "u_mvp");
   const modelLoc = gl.getUniformLocation(program, "u_model");
   const lightLoc = gl.getUniformLocation(program, "u_lightDir");
@@ -1183,8 +1266,8 @@ export function startTerrainPreview(
   const vbo = gl.createBuffer();
   const nbo = gl.createBuffer();
   const uvbo = gl.createBuffer();
+  const skbo = gl.createBuffer();
   const fillIbo = gl.createBuffer();
-  const wireIbo = gl.createBuffer();
   const fallbackTexture = gl.createTexture();
   const aircraftVao = gl.createVertexArray();
   const aircraftShapeBuffer = gl.createBuffer();
@@ -1193,15 +1276,12 @@ export function startTerrainPreview(
   const aircraftInstanceData = new Float32Array(AIRCRAFT_MAX_INSTANCES * AIRCRAFT_INSTANCE_STRIDE);
 
   let indexCount = 0;
-  let wireIndexCount = 0;
   let indexType: number = gl.UNSIGNED_SHORT;
-  let wireIndexType: number = gl.UNSIGNED_SHORT;
   let meshRadius = 1;
   let meshReady = false;
   let atlas: RasterAtlas | null = null;
   let textureReady = false;
   let animationId: number | null = null;
-  let showWireframe = true;
   let azimuth = Math.PI;
   let elevation = 0.6;
   let distance = 1;
@@ -1319,25 +1399,6 @@ export function startTerrainPreview(
     indexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     const indexData = needsUint32 ? mesh.indices : new Uint16Array(mesh.indices);
 
-    const triangleCount = Math.floor(mesh.indices.length / 3);
-    const lineIndexTotal = triangleCount * 6;
-    wireIndexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
-    const wireIndices = needsUint32 ? new Uint32Array(lineIndexTotal) : new Uint16Array(lineIndexTotal);
-    let wi = 0;
-    for (let i = 0; i < triangleCount; i++) {
-      const base = i * 3;
-      const a = mesh.indices[base] ?? 0;
-      const b = mesh.indices[base + 1] ?? 0;
-      const c = mesh.indices[base + 2] ?? 0;
-      wireIndices[wi++] = a;
-      wireIndices[wi++] = b;
-      wireIndices[wi++] = b;
-      wireIndices[wi++] = c;
-      wireIndices[wi++] = c;
-      wireIndices[wi++] = a;
-    }
-    wireIndexCount = wireIndices.length;
-
     gl.bindVertexArray(vao);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -1356,11 +1417,13 @@ export function startTerrainPreview(
     gl.enableVertexAttribArray(uvLoc);
     gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
 
+    gl.bindBuffer(gl.ARRAY_BUFFER, skbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.skirtMask, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(skirtLoc);
+    gl.vertexAttribPointer(skirtLoc, 1, gl.FLOAT, false, 0, 0);
+
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fillIbo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
-
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireIbo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, wireIndices, gl.STATIC_DRAW);
 
     gl.bindVertexArray(null);
     meshReady = true;
@@ -1545,12 +1608,6 @@ export function startTerrainPreview(
   canvas.addEventListener("wheel", onWheel, { passive: true });
   canvas.addEventListener("contextmenu", onContextMenu);
 
-  window.addEventListener("keydown", (event) => {
-    if (event.key.toLowerCase() === "w") {
-      showWireframe = !showWireframe;
-    }
-  });
-
   const render = (time: number) => {
     resize();
     gl.clearColor(0, 0, 0, 0);
@@ -1569,7 +1626,7 @@ export function startTerrainPreview(
       gl.uniformMatrix4fv(mvpLoc, false, mvp);
       gl.uniformMatrix4fv(modelLoc, false, model);
       gl.uniform3f(lightLoc, LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
-      gl.uniform1f(lightMixLoc, 0);
+      gl.uniform1f(lightMixLoc, 1);
       gl.uniform3f(colorLoc, 0.3, 0.7, 0.55);
       gl.uniform1f(textureMixLoc, textureReady ? 1 : 0);
       gl.activeTexture(gl.TEXTURE0);
@@ -1583,11 +1640,6 @@ export function startTerrainPreview(
       gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
       gl.disable(gl.POLYGON_OFFSET_FILL);
 
-      if (showWireframe) {
-        gl.uniform3f(colorLoc, 0.85, 0.95, 1.0);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireIbo);
-        gl.drawElements(gl.LINES, wireIndexCount, wireIndexType, 0);
-      }
       gl.bindVertexArray(null);
 
       if (
@@ -1673,8 +1725,8 @@ export function startTerrainPreview(
       gl.deleteBuffer(vbo);
       gl.deleteBuffer(nbo);
       gl.deleteBuffer(uvbo);
+      gl.deleteBuffer(skbo);
       gl.deleteBuffer(fillIbo);
-      gl.deleteBuffer(wireIbo);
       if (vao) gl.deleteVertexArray(vao);
       if (aircraftVao) gl.deleteVertexArray(aircraftVao);
       gl.deleteBuffer(aircraftShapeBuffer);
