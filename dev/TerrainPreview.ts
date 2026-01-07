@@ -1,14 +1,20 @@
+import { TILE_SIZE } from "../src/constants";
+import { lonLatToTessera } from "../src/geo/projection";
+
 const VERTEX_SHADER = `#version 300 es
 in vec3 a_position;
 in vec3 a_normal;
+in vec2 a_uv;
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform vec3 u_lightDir;
 out float v_light;
+out vec2 v_uv;
 void main() {
   vec3 normal = normalize(mat3(u_model) * a_normal);
   float diff = max(dot(normal, normalize(-u_lightDir)), 0.0);
   v_light = 0.2 + 0.8 * diff;
+  v_uv = a_uv;
   gl_Position = u_mvp * vec4(a_position, 1.0);
 }
 `;
@@ -16,10 +22,17 @@ void main() {
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in float v_light;
+in vec2 v_uv;
+uniform sampler2D u_texture;
+uniform float u_textureMix;
 uniform vec3 u_color;
 out vec4 fragColor;
 void main() {
-  fragColor = vec4(u_color * v_light, 1.0);
+  vec3 baseColor = u_color;
+  if (u_textureMix > 0.0) {
+    baseColor = texture(u_texture, v_uv).rgb;
+  }
+  fragColor = vec4(baseColor * v_light, 1.0);
 }
 `;
 
@@ -33,6 +46,9 @@ const PAN_SPEED = 1.0;
 const MIN_ELEVATION = -1.2;
 const MAX_ELEVATION = 1.2;
 const FOV = Math.PI / 3.5;
+const RASTER_ZOOM_OFFSET = 0;
+const MAX_RASTER_TILES = 64;
+const RASTER_SUBDOMAINS = ["a", "b", "c", "d"] as const;
 
 interface TerrainLayer {
   tiles: string[];
@@ -45,12 +61,14 @@ interface TerrainMesh {
   positions: Float32Array;
   normals: Float32Array;
   indices: Uint32Array;
+  tesseraCoords: Float32Array;
   radius: number;
 }
 
 interface DecodedTile {
   positions: Float32Array<ArrayBuffer>;
   indices: Uint32Array<ArrayBuffer>;
+  tesseraCoords: Float32Array<ArrayBuffer>;
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -88,6 +106,22 @@ function appendAccessToken(url: string, token: string): string {
   if (url.includes("access_token=")) return url;
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}access_token=${token}`;
+}
+
+function getRasterTileUrl(z: number, x: number, y: number): string {
+  const subdomain = RASTER_SUBDOMAINS[(x + y) % RASTER_SUBDOMAINS.length]!;
+  return `https://${subdomain}.basemaps.cartocdn.com/rastertiles/dark_all/${z}/${x}/${y}@2x.png`;
+}
+
+async function loadRasterTileImage(z: number, x: number, y: number): Promise<HTMLImageElement | null> {
+  const url = getRasterTileUrl(z, x, y);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
 }
 
 async function fetchIonLayer(token: string): Promise<TerrainLayer & { baseUrl: string; accessToken: string }> {
@@ -267,6 +301,129 @@ function tileBounds(x: number, y: number, zoom: number, projection: string, sche
   const north = 90 - yForBounds * tileHeight;
   const south = north - tileHeight;
   return { west, east, south, north };
+}
+
+interface RasterAtlas {
+  texture: WebGLTexture;
+  zoom: number;
+  minTileX: number;
+  minTileY: number;
+  tilesWide: number;
+  tilesHigh: number;
+}
+
+function getTesseraBounds(coords: Float32Array): { minX: number; maxX: number; minY: number; maxY: number } {
+  let minX = 1;
+  let maxX = 0;
+  let minY = 1;
+  let maxY = 0;
+  for (let i = 0; i < coords.length; i += 2) {
+    const x = coords[i] ?? 0;
+    const y = coords[i + 1] ?? 0;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  return { minX, maxX, minY, maxY };
+}
+
+function computeRasterRange(bounds: { minX: number; maxX: number; minY: number; maxY: number }, zoom: number): {
+  zoom: number;
+  minTileX: number;
+  maxTileX: number;
+  minTileY: number;
+  maxTileY: number;
+  tilesWide: number;
+  tilesHigh: number;
+} {
+  const tiles = 1 << zoom;
+  const maxX = Math.min(bounds.maxX, 1 - 1e-6);
+  const maxY = Math.min(bounds.maxY, 1 - 1e-6);
+  const minTileX = Math.max(0, Math.floor(bounds.minX * tiles));
+  const maxTileX = Math.min(tiles - 1, Math.floor(maxX * tiles));
+  const minTileY = Math.max(0, Math.floor(bounds.minY * tiles));
+  const maxTileY = Math.min(tiles - 1, Math.floor(maxY * tiles));
+  const tilesWide = Math.max(1, maxTileX - minTileX + 1);
+  const tilesHigh = Math.max(1, maxTileY - minTileY + 1);
+  return { zoom, minTileX, maxTileX, minTileY, maxTileY, tilesWide, tilesHigh };
+}
+
+async function buildRasterAtlas(
+  gl: WebGL2RenderingContext,
+  coords: Float32Array,
+  desiredZoom: number
+): Promise<RasterAtlas | null> {
+  const bounds = getTesseraBounds(coords);
+  const clamped = {
+    minX: clamp(bounds.minX, 0, 1),
+    maxX: clamp(bounds.maxX, 0, 1),
+    minY: clamp(bounds.minY, 0, 1),
+    maxY: clamp(bounds.maxY, 0, 1),
+  };
+
+  let zoom = Math.max(0, desiredZoom);
+  let range = computeRasterRange(clamped, zoom);
+  while (zoom > 0 && range.tilesWide * range.tilesHigh > MAX_RASTER_TILES) {
+    zoom -= 1;
+    range = computeRasterRange(clamped, zoom);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = range.tilesWide * TILE_SIZE;
+  canvas.height = range.tilesHigh * TILE_SIZE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const tilePromises: Promise<void>[] = [];
+  for (let y = range.minTileY; y <= range.maxTileY; y++) {
+    for (let x = range.minTileX; x <= range.maxTileX; x++) {
+      tilePromises.push((async () => {
+        const img = await loadRasterTileImage(range.zoom, x, y);
+        if (!img) return;
+        const dx = (x - range.minTileX) * TILE_SIZE;
+        const dy = (y - range.minTileY) * TILE_SIZE;
+        ctx.drawImage(img, dx, dy, TILE_SIZE, TILE_SIZE);
+      })());
+    }
+  }
+  await Promise.all(tilePromises);
+
+  const texture = gl.createTexture();
+  if (!texture) return null;
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  return {
+    texture,
+    zoom: range.zoom,
+    minTileX: range.minTileX,
+    minTileY: range.minTileY,
+    tilesWide: range.tilesWide,
+    tilesHigh: range.tilesHigh,
+  };
+}
+
+function computeAtlasUVs(coords: Float32Array, atlas: RasterAtlas): Float32Array {
+  const uvs = new Float32Array(coords.length);
+  const tiles = 1 << atlas.zoom;
+  for (let i = 0; i < coords.length; i += 2) {
+    const x = coords[i] ?? 0;
+    const y = coords[i + 1] ?? 0;
+    const tileX = x * tiles - atlas.minTileX;
+    const tileY = y * tiles - atlas.minTileY;
+    const u = tileX / atlas.tilesWide;
+    const v = tileY / atlas.tilesHigh;
+    uvs[i] = clamp(u, 0, 1);
+    uvs[i + 1] = clamp(v, 0, 1);
+  }
+  return uvs;
 }
 
 function lonLatHeightToECEF(lonDeg: number, latDeg: number, height: number): [number, number, number] {
@@ -461,7 +618,9 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
         Math.max(0, east.length - 1) * 6 +
         Math.max(0, south.length - 1) * 6 +
         Math.max(0, north.length - 1) * 6;
-      const positions = new Float32Array((decoded.vertexCount + skirtVertexCount) * 3);
+      const totalVertexCount = decoded.vertexCount + skirtVertexCount;
+      const positions = new Float32Array(totalVertexCount * 3);
+      const tesseraCoords = new Float32Array(totalVertexCount * 2);
       const heightRange = decoded.maxHeight - decoded.minHeight;
       const skirtHeight = Math.max(30, heightRange * 0.1);
       const skirtDepth = skirtHeight * scale;
@@ -500,6 +659,9 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
         positions[i * 3] = east * scale;
         positions[i * 3 + 1] = north * scale;
         positions[i * 3 + 2] = up * scale;
+        const tessera = lonLatToTessera(lonDeg, latDeg);
+        tesseraCoords[i * 2] = tessera.x;
+        tesseraCoords[i * 2 + 1] = tessera.y;
       }
 
       const indices = new Uint32Array(decoded.indices.length + skirtIndexCount);
@@ -519,6 +681,10 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
           positions[skirtBase] = positions[baseOffset] ?? 0;
           positions[skirtBase + 1] = positions[baseOffset + 1] ?? 0;
           positions[skirtBase + 2] = (positions[baseOffset + 2] ?? 0) - skirtDepth;
+          const tessBase = base * 2;
+          const tessSkirt = skirtIndex * 2;
+          tesseraCoords[tessSkirt] = tesseraCoords[tessBase] ?? 0;
+          tesseraCoords[tessSkirt + 1] = tesseraCoords[tessBase + 1] ?? 0;
         }
         for (let i = 0; i < edge.length - 1; i++) {
           const v0 = edge[i] ?? 0;
@@ -539,7 +705,7 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
       addSkirt(east);
       addSkirt(north);
 
-      return { positions, indices } satisfies DecodedTile;
+      return { positions, indices, tesseraCoords } satisfies DecodedTile;
     } catch {
       return null;
     }
@@ -557,12 +723,14 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
 
   const totalIndices = validTiles.reduce((sum, tile) => sum + tile.indices.length, 0);
   const positions = new Float32Array(totalVertices * 3);
+  const tesseraCoords = new Float32Array(totalVertices * 2);
   const indices = new Uint32Array(totalIndices);
 
   let vertexOffset = 0;
   let indexOffset = 0;
   for (const tile of validTiles) {
     positions.set(tile.positions, vertexOffset * 3);
+    tesseraCoords.set(tile.tesseraCoords, vertexOffset * 2);
     for (let i = 0; i < tile.indices.length; i++) {
       indices[indexOffset + i] = (tile.indices[i] ?? 0) + vertexOffset;
     }
@@ -613,6 +781,7 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
     positions,
     normals,
     indices,
+    tesseraCoords,
     radius,
   };
 }
@@ -703,6 +872,9 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     throw new Error("WebGL2 not supported for terrain preview");
   }
 
+  const TERRAIN_CENTER = { lat: 37.7749, lon: -122.4194 };
+  const TERRAIN_ZOOM = 10;
+
   const token =
     (import.meta as { env?: { VITE_CESIUM_TOKEN?: string } }).env?.VITE_CESIUM_TOKEN ??
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJkYzA4YzQzZS05MGQzLTRiYjItOTZlOC0xZjQ2NjYxNDNlMWMiLCJpZCI6MjE0Njg1LCJpYXQiOjE3MTU1NzIxOTB9.HH1wsTeS17mag5SRH7eZF6gMtf_IEWO6P1yWZVjxRO0";
@@ -710,16 +882,21 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   const program = createProgram(gl);
   const positionLoc = gl.getAttribLocation(program, "a_position");
   const normalLoc = gl.getAttribLocation(program, "a_normal");
+  const uvLoc = gl.getAttribLocation(program, "a_uv");
   const mvpLoc = gl.getUniformLocation(program, "u_mvp");
   const modelLoc = gl.getUniformLocation(program, "u_model");
   const lightLoc = gl.getUniformLocation(program, "u_lightDir");
   const colorLoc = gl.getUniformLocation(program, "u_color");
+  const textureLoc = gl.getUniformLocation(program, "u_texture");
+  const textureMixLoc = gl.getUniformLocation(program, "u_textureMix");
 
   const vao = gl.createVertexArray();
   const vbo = gl.createBuffer();
   const nbo = gl.createBuffer();
+  const uvbo = gl.createBuffer();
   const fillIbo = gl.createBuffer();
   const wireIbo = gl.createBuffer();
+  const fallbackTexture = gl.createTexture();
 
   let indexCount = 0;
   let wireIndexCount = 0;
@@ -727,6 +904,8 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   let wireIndexType: number = gl.UNSIGNED_SHORT;
   let meshRadius = 1;
   let meshReady = false;
+  let atlas: RasterAtlas | null = null;
+  let textureReady = false;
   let animationId: number | null = null;
   let showWireframe = true;
   let azimuth = Math.PI;
@@ -739,6 +918,25 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   let lastX = 0;
   let lastY = 0;
   const target: [number, number, number] = [0, 0, 0];
+
+  if (fallbackTexture) {
+    gl.bindTexture(gl.TEXTURE_2D, fallbackTexture);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([255, 255, 255, 255])
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  }
 
   const resize = () => {
     const dpr = window.devicePixelRatio || 1;
@@ -753,7 +951,7 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   };
 
   const load = async () => {
-    const mesh = await loadTerrainMesh(token, 37.7749, -122.4194, 10);
+    const mesh = await loadTerrainMesh(token, TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
     indexCount = mesh.indices.length;
     meshRadius = Math.max(mesh.radius, 0.001);
     distance = meshRadius * 1.8;
@@ -794,6 +992,12 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     gl.enableVertexAttribArray(normalLoc);
     gl.vertexAttribPointer(normalLoc, 3, gl.FLOAT, false, 0, 0);
 
+    const initialUvs = new Float32Array((mesh.positions.length / 3) * 2);
+    gl.bindBuffer(gl.ARRAY_BUFFER, uvbo);
+    gl.bufferData(gl.ARRAY_BUFFER, initialUvs, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(uvLoc);
+    gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
+
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fillIbo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
 
@@ -802,6 +1006,17 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
 
     gl.bindVertexArray(null);
     meshReady = true;
+
+    void (async () => {
+      const rasterZoom = Math.max(0, TERRAIN_ZOOM + RASTER_ZOOM_OFFSET);
+      const atlasResult = await buildRasterAtlas(gl, mesh.tesseraCoords, rasterZoom);
+      if (!atlasResult) return;
+      atlas = atlasResult;
+      const uvs = computeAtlasUVs(mesh.tesseraCoords, atlasResult);
+      gl.bindBuffer(gl.ARRAY_BUFFER, uvbo);
+      gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+      textureReady = true;
+    })();
   };
 
   void load();
@@ -925,6 +1140,10 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
       gl.uniformMatrix4fv(modelLoc, false, model);
       gl.uniform3f(lightLoc, -0.4, -0.6, 1.0);
       gl.uniform3f(colorLoc, 0.12, 0.45, 0.32);
+      gl.uniform1f(textureMixLoc, textureReady ? 1 : 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, textureReady ? atlas?.texture ?? fallbackTexture : fallbackTexture);
+      gl.uniform1i(textureLoc, 0);
 
       gl.bindVertexArray(vao);
       gl.enable(gl.POLYGON_OFFSET_FILL);
@@ -960,9 +1179,12 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
       canvas.removeEventListener("contextmenu", onContextMenu);
       gl.deleteBuffer(vbo);
       gl.deleteBuffer(nbo);
+      gl.deleteBuffer(uvbo);
       gl.deleteBuffer(fillIbo);
       gl.deleteBuffer(wireIbo);
       if (vao) gl.deleteVertexArray(vao);
+      if (atlas?.texture) gl.deleteTexture(atlas.texture);
+      if (fallbackTexture) gl.deleteTexture(fallbackTexture);
       gl.deleteProgram(program);
     },
     resize,
