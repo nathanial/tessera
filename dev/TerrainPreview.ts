@@ -3,6 +3,11 @@ import { lonLatToTessera, tesseraToLonLat } from "../src/geo/projection";
 import type { Aircraft } from "./adsb";
 import { getAltitudeColor } from "./adsb";
 import { getWrappedX } from "./CoordinateUtils";
+import { LabelPlacer, type LabelItem } from "./labels";
+
+const LABEL_FONT_SIZE = 18;
+const LABEL_CHAR_WIDTH = 0.55;
+const LABEL_FONT = "600 18px Arial";
 
 const SKIRT_LIGHT_MIN = 0.6;
 
@@ -1219,6 +1224,28 @@ function mat4RotateZ(angle: number): Float32Array {
   return out;
 }
 
+function projectToScreen(
+  position: [number, number, number],
+  mvp: Float32Array,
+  width: number,
+  height: number
+): { x: number; y: number } | null {
+  const x = position[0];
+  const y = position[1];
+  const z = position[2];
+  const clipX = (mvp[0] ?? 0) * x + (mvp[4] ?? 0) * y + (mvp[8] ?? 0) * z + (mvp[12] ?? 0);
+  const clipY = (mvp[1] ?? 0) * x + (mvp[5] ?? 0) * y + (mvp[9] ?? 0) * z + (mvp[13] ?? 0);
+  const clipW = (mvp[3] ?? 0) * x + (mvp[7] ?? 0) * y + (mvp[11] ?? 0) * z + (mvp[15] ?? 0);
+  if (clipW <= 0) return null;
+  const ndcX = clipX / clipW;
+  const ndcY = clipY / clipW;
+  if (ndcX < -1.2 || ndcX > 1.2 || ndcY < -1.2 || ndcY > 1.2) return null;
+  return {
+    x: (ndcX * 0.5 + 0.5) * width,
+    y: (1 - (ndcY * 0.5 + 0.5)) * height,
+  };
+}
+
 export function startTerrainPreview(
   canvas: HTMLCanvasElement
 ): {
@@ -1230,6 +1257,21 @@ export function startTerrainPreview(
   const gl = canvas.getContext("webgl2", { antialias: true, alpha: true });
   if (!gl) {
     throw new Error("WebGL2 not supported for terrain preview");
+  }
+
+  const labelCanvas = document.getElementById("terrain-labels") as HTMLCanvasElement | null;
+  const labelCtx = labelCanvas?.getContext("2d") ?? null;
+  const labelPlacer = new LabelPlacer({
+    fontSize: LABEL_FONT_SIZE,
+    charWidth: LABEL_CHAR_WIDTH,
+    calloutThreshold: 4,
+    maxCalloutLabels: 5,
+  });
+  if (labelCtx) {
+    labelPlacer.setMeasureFunction((text, fontSize) => {
+      labelCtx.font = `600 ${fontSize}px Arial`;
+      return labelCtx.measureText(text).width;
+    });
   }
 
   const TERRAIN_CENTER = { lat: 37.7749, lon: -122.4194 };
@@ -1377,6 +1419,10 @@ export function startTerrainPreview(
       canvas.width = width;
       canvas.height = height;
       gl.viewport(0, 0, width, height);
+    }
+    if (labelCanvas && (labelCanvas.width !== width || labelCanvas.height !== height)) {
+      labelCanvas.width = width;
+      labelCanvas.height = height;
     }
   };
 
@@ -1612,6 +1658,9 @@ export function startTerrainPreview(
     resize();
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (labelCtx && labelCanvas) {
+      labelCtx.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+    }
 
     if (meshReady) {
       const aspect = canvas.width / canvas.height;
@@ -1642,6 +1691,9 @@ export function startTerrainPreview(
 
       gl.bindVertexArray(null);
 
+      const labelItems: LabelItem[] = [];
+      let labelOffsetPx = 12;
+
       if (
         aircraftReady &&
         aircraftInstanceBuffer &&
@@ -1654,6 +1706,21 @@ export function startTerrainPreview(
         const bounds = currentView.bounds;
         const worldSize = sizes.world;
         const enuSize = sizes.enu;
+        const labelAnchor = projectToScreen(target, mvp, canvas.width, canvas.height);
+        if (labelAnchor) {
+          const labelOffsetAnchor = projectToScreen(
+            [target[0] + enuSize, target[1], target[2]],
+            mvp,
+            canvas.width,
+            canvas.height
+          );
+          if (labelOffsetAnchor) {
+            labelOffsetPx = Math.max(
+              8,
+              Math.hypot(labelOffsetAnchor.x - labelAnchor.x, labelOffsetAnchor.y - labelAnchor.y) * 1.2
+            );
+          }
+        }
         let count = 0;
 
         for (const ac of aircraftList) {
@@ -1666,6 +1733,16 @@ export function startTerrainPreview(
           const altitude = (ac.onGround ? 0 : ac.altitude) + AIRCRAFT_ALTITUDE_OFFSET;
           const pos = projectTesseraToEnu(renderX, ac.y, altitude, meshReference, meshScale, meshOffset);
           const color = getAltitudeColor(ac.altitude, ac.onGround);
+          const screen = projectToScreen(pos, mvp, canvas.width, canvas.height);
+          if (screen && currentView.zoom >= 4) {
+            labelItems.push({
+              id: ac.icao24,
+              text: ac.callsign || ac.icao24,
+              anchorX: screen.x,
+              anchorY: screen.y,
+              priority: ac.callsign ? 1 : 0,
+            });
+          }
 
           const base = count * AIRCRAFT_INSTANCE_STRIDE;
           aircraftInstanceData[base] = pos[0];
@@ -1698,6 +1775,92 @@ export function startTerrainPreview(
           gl.disable(gl.BLEND);
           gl.bindVertexArray(null);
         }
+      }
+
+      if (labelCtx && labelCanvas && labelItems.length > 0) {
+        const placement = labelPlacer.place(
+          labelItems,
+          (x, y) => ({ screenX: x, screenY: y }),
+          labelCanvas.width,
+          labelCanvas.height,
+          labelOffsetPx,
+          { x: 0, y: 0 }
+        );
+
+        labelCtx.save();
+        labelCtx.font = LABEL_FONT;
+        labelCtx.textBaseline = "middle";
+        labelCtx.textAlign = "left";
+        labelCtx.lineWidth = 2;
+
+        const drawText = (text: string, x: number, y: number) => {
+          labelCtx.strokeStyle = "rgba(0, 0, 0, 0.8)";
+          labelCtx.strokeText(text, x, y);
+          labelCtx.fillStyle = "rgba(255, 255, 255, 1)";
+          labelCtx.fillText(text, x, y);
+        };
+
+        for (const label of placement.directLabels) {
+          drawText(label.item.text, label.screenX, label.screenY + LABEL_FONT_SIZE / 2);
+        }
+
+        labelCtx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+        labelCtx.lineWidth = 1;
+        for (const label of placement.leaderLabels) {
+          labelCtx.beginPath();
+          labelCtx.moveTo(label.anchorScreenX, label.anchorScreenY);
+          labelCtx.lineTo(label.screenX, label.screenY + LABEL_FONT_SIZE / 2);
+          labelCtx.stroke();
+          drawText(label.item.text, label.screenX, label.screenY + LABEL_FONT_SIZE / 2);
+        }
+
+        for (const callout of placement.callouts) {
+          const boxCenterX = callout.boxX + callout.boxWidth / 2;
+          const boxCenterY = callout.boxY + callout.boxHeight / 2;
+          labelCtx.strokeStyle = "rgba(255, 255, 255, 1)";
+          labelCtx.lineWidth = 1;
+          labelCtx.beginPath();
+          labelCtx.moveTo(boxCenterX, boxCenterY);
+          labelCtx.lineTo(callout.centroidX, callout.centroidY);
+          labelCtx.stroke();
+
+          labelCtx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+          for (const acPoint of callout.aircraftPoints) {
+            labelCtx.beginPath();
+            labelCtx.moveTo(callout.centroidX, callout.centroidY);
+            labelCtx.lineTo(acPoint.screenX, acPoint.screenY);
+            labelCtx.stroke();
+          }
+        }
+
+        for (const callout of placement.callouts) {
+          labelCtx.fillStyle = "rgba(26, 26, 26, 1)";
+          labelCtx.fillRect(callout.boxX, callout.boxY, callout.boxWidth, callout.boxHeight);
+          labelCtx.strokeStyle = "rgba(255, 255, 255, 0.6)";
+          labelCtx.lineWidth = 1;
+          labelCtx.strokeRect(callout.boxX, callout.boxY, callout.boxWidth, callout.boxHeight);
+
+          const lineHeight = LABEL_FONT_SIZE * 1.2;
+          const padding = 4;
+          for (let i = 0; i < callout.items.length; i++) {
+            const textY = callout.boxY + padding + (i + 0.5) * lineHeight;
+            drawText(callout.items[i]!.text, callout.boxX + padding, textY);
+          }
+          if (callout.hiddenCount > 0) {
+            const textY = callout.boxY + padding + (callout.items.length + 0.5) * lineHeight;
+            drawText(`+${callout.hiddenCount} more`, callout.boxX + padding, textY);
+          }
+        }
+
+        if (placement.hiddenIndicator) {
+          drawText(
+            placement.hiddenIndicator.item.text,
+            placement.hiddenIndicator.screenX,
+            placement.hiddenIndicator.screenY + LABEL_FONT_SIZE / 2
+          );
+        }
+
+        labelCtx.restore();
       }
     }
 

@@ -51,6 +51,10 @@
         z-index: 10;
         pointer-events: auto;
       }
+      #terrain-canvas-wrap {
+        position: relative;
+        flex: 1;
+      }
       #terrain-panel-header {
         padding: 10px 12px 6px;
         font-size: 12px;
@@ -59,10 +63,19 @@
         color: rgba(160, 210, 255, 0.9);
       }
       #terrain-canvas {
+        position: absolute;
+        inset: 0;
         width: 100%;
         height: 100%;
-        flex: 1;
         display: block;
+      }
+      #terrain-labels {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        pointer-events: none;
       }
       #cube-panel-header {
         padding: 10px 12px 6px;
@@ -118,7 +131,10 @@
     </div>
     <div id="terrain-panel" aria-hidden="true">
       <div id="terrain-panel-header">Terrain Preview</div>
-      <canvas id="terrain-canvas"></canvas>
+      <div id="terrain-canvas-wrap">
+        <canvas id="terrain-canvas"></canvas>
+        <canvas id="terrain-labels"></canvas>
+      </div>
     </div>
     <div id="context-menu">
       <button id="context-go-here" type="button">Go Here</button>
