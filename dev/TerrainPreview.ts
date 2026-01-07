@@ -11,12 +11,14 @@ in vec2 a_uv;
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform vec3 u_lightDir;
+uniform float u_lightMix;
 out float v_light;
 out vec2 v_uv;
 void main() {
   vec3 normal = normalize(mat3(u_model) * a_normal);
   float diff = max(dot(normal, normalize(-u_lightDir)), 0.0);
-  v_light = 0.5 + 0.5 * diff;
+  float lighting = 0.5 + 0.5 * diff;
+  v_light = mix(1.0, lighting, u_lightMix);
   v_uv = a_uv;
   gl_Position = u_mvp * vec4(a_position, 1.0);
 }
@@ -40,22 +42,32 @@ void main() {
 `;
 
 const AIRCRAFT_VERTEX_SHADER = `#version 300 es
-in vec2 a_shape;
+in vec3 a_shape;
+in vec3 a_normal;
 in vec3 a_instancePos;
 in float a_heading;
 in float a_size;
 in vec3 a_color;
 uniform mat4 u_mvp;
+uniform vec3 u_lightDir;
 out vec3 v_color;
+out float v_light;
 void main() {
   float angle = -a_heading;
   float c = cos(angle);
   float s = sin(angle);
-  vec2 rotated = vec2(
+  vec3 rotated = vec3(
     a_shape.x * c - a_shape.y * s,
-    a_shape.x * s + a_shape.y * c
-  ) * a_size;
-  vec3 world = a_instancePos + vec3(rotated, 0.0);
+    a_shape.x * s + a_shape.y * c,
+    a_shape.z
+  );
+  vec3 world = a_instancePos + rotated * a_size;
+  vec3 normal = vec3(
+    a_normal.x * c - a_normal.y * s,
+    a_normal.x * s + a_normal.y * c,
+    a_normal.z
+  );
+  v_light = 0.35 + 0.65 * max(dot(normalize(normal), normalize(-u_lightDir)), 0.0);
   gl_Position = u_mvp * vec4(world, 1.0);
   v_color = a_color;
 }
@@ -64,9 +76,10 @@ void main() {
 const AIRCRAFT_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in vec3 v_color;
+in float v_light;
 out vec4 fragColor;
 void main() {
-  fragColor = vec4(v_color, 0.95);
+  fragColor = vec4(v_color * v_light, 0.96);
 }
 `;
 
@@ -82,15 +95,15 @@ const MAX_ELEVATION = 1.2;
 const FOV = Math.PI / 3.5;
 const RASTER_ZOOM_OFFSET = 0;
 const MAX_RASTER_TILES = 64;
-const AIRCRAFT_SHAPE = new Float32Array([
-  0, 1,
-  -0.5, -0.8,
-  0, -0.4,
-  0, 1,
-  0, -0.4,
-  0.5, -0.8,
-]);
-const AIRCRAFT_VERTEX_COUNT = AIRCRAFT_SHAPE.length / 2;
+const LIGHT_DIR: [number, number, number] = [0.1, 0.2, -1.4];
+const AIRCRAFT_BASE: Array<[number, number]> = [
+  [0, 1],
+  [-0.5, -0.8],
+  [0.5, -0.8],
+];
+const AIRCRAFT_HALF_HEIGHT = 0.25;
+const AIRCRAFT_SHAPE = buildExtrudedShape(AIRCRAFT_BASE, AIRCRAFT_HALF_HEIGHT);
+const AIRCRAFT_VERTEX_COUNT = AIRCRAFT_SHAPE.positions.length / 3;
 const AIRCRAFT_INSTANCE_STRIDE = 8;
 const AIRCRAFT_MAX_INSTANCES = 3000;
 const AIRCRAFT_SCREEN_SIZE = 15;
@@ -158,6 +171,55 @@ interface TileRange {
   maxY: number;
   xTiles: number;
   yTiles: number;
+}
+
+function buildExtrudedShape(
+  base: Array<[number, number]>,
+  halfHeight: number
+): { positions: Float32Array; normals: Float32Array } {
+  const positions: number[] = [];
+  const normals: number[] = [];
+
+  const pushTri = (a: [number, number, number], b: [number, number, number], c: [number, number, number]) => {
+    positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    const abx = b[0] - a[0];
+    const aby = b[1] - a[1];
+    const abz = b[2] - a[2];
+    const acx = c[0] - a[0];
+    const acy = c[1] - a[1];
+    const acz = c[2] - a[2];
+    const nx = aby * acz - abz * acy;
+    const ny = abz * acx - abx * acz;
+    const nz = abx * acy - aby * acx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    const n0 = nx / len;
+    const n1 = ny / len;
+    const n2 = nz / len;
+    normals.push(n0, n1, n2, n0, n1, n2, n0, n1, n2);
+  };
+
+  const top = base.map(([x, y]) => [x, y, halfHeight] as [number, number, number]);
+  const bottom = base.map(([x, y]) => [x, y, -halfHeight] as [number, number, number]);
+
+  if (base.length >= 3) {
+    pushTri(top[0]!, top[1]!, top[2]!);
+    pushTri(bottom[0]!, bottom[2]!, bottom[1]!);
+  }
+
+  for (let i = 0; i < base.length; i++) {
+    const next = (i + 1) % base.length;
+    const aTop = top[i]!;
+    const bTop = top[next]!;
+    const aBottom = bottom[i]!;
+    const bBottom = bottom[next]!;
+    pushTri(aTop, bTop, bBottom);
+    pushTri(aTop, bBottom, aBottom);
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+  };
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -1102,17 +1164,20 @@ export function startTerrainPreview(
   const mvpLoc = gl.getUniformLocation(program, "u_mvp");
   const modelLoc = gl.getUniformLocation(program, "u_model");
   const lightLoc = gl.getUniformLocation(program, "u_lightDir");
+  const lightMixLoc = gl.getUniformLocation(program, "u_lightMix");
   const colorLoc = gl.getUniformLocation(program, "u_color");
   const textureLoc = gl.getUniformLocation(program, "u_texture");
   const textureMixLoc = gl.getUniformLocation(program, "u_textureMix");
 
   const aircraftProgram = createProgramWithSource(gl, AIRCRAFT_VERTEX_SHADER, AIRCRAFT_FRAGMENT_SHADER);
   const aircraftShapeLoc = gl.getAttribLocation(aircraftProgram, "a_shape");
+  const aircraftNormalLoc = gl.getAttribLocation(aircraftProgram, "a_normal");
   const aircraftPosLoc = gl.getAttribLocation(aircraftProgram, "a_instancePos");
   const aircraftHeadingLoc = gl.getAttribLocation(aircraftProgram, "a_heading");
   const aircraftSizeLoc = gl.getAttribLocation(aircraftProgram, "a_size");
   const aircraftColorLoc = gl.getAttribLocation(aircraftProgram, "a_color");
   const aircraftMvpLoc = gl.getUniformLocation(aircraftProgram, "u_mvp");
+  const aircraftLightLoc = gl.getUniformLocation(aircraftProgram, "u_lightDir");
 
   const vao = gl.createVertexArray();
   const vbo = gl.createBuffer();
@@ -1123,6 +1188,7 @@ export function startTerrainPreview(
   const fallbackTexture = gl.createTexture();
   const aircraftVao = gl.createVertexArray();
   const aircraftShapeBuffer = gl.createBuffer();
+  const aircraftNormalBuffer = gl.createBuffer();
   const aircraftInstanceBuffer = gl.createBuffer();
   const aircraftInstanceData = new Float32Array(AIRCRAFT_MAX_INSTANCES * AIRCRAFT_INSTANCE_STRIDE);
 
@@ -1176,15 +1242,21 @@ export function startTerrainPreview(
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   }
 
-  const aircraftReady = Boolean(aircraftVao && aircraftShapeBuffer && aircraftInstanceBuffer);
+  const aircraftReady = Boolean(aircraftVao && aircraftShapeBuffer && aircraftNormalBuffer && aircraftInstanceBuffer);
   if (aircraftReady) {
     gl.bindVertexArray(aircraftVao);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, aircraftShapeBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, AIRCRAFT_SHAPE, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, AIRCRAFT_SHAPE.positions, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(aircraftShapeLoc);
-    gl.vertexAttribPointer(aircraftShapeLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(aircraftShapeLoc, 3, gl.FLOAT, false, 0, 0);
     gl.vertexAttribDivisor(aircraftShapeLoc, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, aircraftNormalBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, AIRCRAFT_SHAPE.normals, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(aircraftNormalLoc);
+    gl.vertexAttribPointer(aircraftNormalLoc, 3, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribDivisor(aircraftNormalLoc, 0);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, aircraftInstanceBuffer);
     gl.bufferData(
@@ -1496,7 +1568,8 @@ export function startTerrainPreview(
       gl.useProgram(program);
       gl.uniformMatrix4fv(mvpLoc, false, mvp);
       gl.uniformMatrix4fv(modelLoc, false, model);
-      gl.uniform3f(lightLoc, -0.4, -0.6, 1.0);
+      gl.uniform3f(lightLoc, LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
+      gl.uniform1f(lightMixLoc, 0);
       gl.uniform3f(colorLoc, 0.3, 0.7, 0.55);
       gl.uniform1f(textureMixLoc, textureReady ? 1 : 0);
       gl.activeTexture(gl.TEXTURE0);
@@ -1565,6 +1638,7 @@ export function startTerrainPreview(
 
           gl.useProgram(aircraftProgram);
           gl.uniformMatrix4fv(aircraftMvpLoc, false, mvp);
+          gl.uniform3f(aircraftLightLoc, LIGHT_DIR[0], LIGHT_DIR[1], LIGHT_DIR[2]);
           gl.bindVertexArray(aircraftVao);
           gl.enable(gl.BLEND);
           gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -1604,6 +1678,7 @@ export function startTerrainPreview(
       if (vao) gl.deleteVertexArray(vao);
       if (aircraftVao) gl.deleteVertexArray(aircraftVao);
       gl.deleteBuffer(aircraftShapeBuffer);
+      gl.deleteBuffer(aircraftNormalBuffer);
       gl.deleteBuffer(aircraftInstanceBuffer);
       if (atlas?.texture) gl.deleteTexture(atlas.texture);
       if (fallbackTexture) gl.deleteTexture(fallbackTexture);
