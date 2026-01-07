@@ -16,10 +16,10 @@ void main() {
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in float v_light;
+uniform vec3 u_color;
 out vec4 fragColor;
 void main() {
-  vec3 base = vec3(0.12, 0.45, 0.32);
-  fragColor = vec4(base * v_light, 1.0);
+  fragColor = vec4(u_color * v_light, 1.0);
 }
 `;
 
@@ -38,6 +38,7 @@ interface TerrainMesh {
   positions: Float32Array;
   normals: Float32Array;
   indices: Uint32Array;
+  radius: number;
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -277,15 +278,15 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
   const { x, y } = lonLatToTileXY(lon, lat, zoom, projection, scheme);
   const tileTemplate = layer.tiles[0] ?? "";
 
-  const tileUrl = appendAccessToken(
-    tileTemplate
-      .replace("{z}", `${zoom}`)
-      .replace("{x}", `${x}`)
-      .replace("{y}", `${y}`)
-      .replace("{version}", "1.0")
-      .replace("{ext}", "terrain"),
-    layer.accessToken
-  );
+  const resolvedTemplate = tileTemplate
+    .replace("{z}", `${zoom}`)
+    .replace("{x}", `${x}`)
+    .replace("{y}", `${y}`)
+    .replace("{version}", "1.0")
+    .replace("{ext}", "terrain");
+  const baseUrl = new URL(layer.baseUrl);
+  const resolvedUrl = new URL(resolvedTemplate, baseUrl).toString();
+  const tileUrl = appendAccessToken(resolvedUrl, layer.accessToken);
 
   const response = await fetch(tileUrl);
   if (!response.ok) {
@@ -295,15 +296,18 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
   const view = new DataView(buffer);
 
   let offset = 0;
-  const centerX = view.getFloat64(offset, true); offset += 8;
-  const centerY = view.getFloat64(offset, true); offset += 8;
-  const centerZ = view.getFloat64(offset, true); offset += 8;
+  const tileCenterX = view.getFloat64(offset, true); offset += 8;
+  const tileCenterY = view.getFloat64(offset, true); offset += 8;
+  const tileCenterZ = view.getFloat64(offset, true); offset += 8;
   const minHeight = view.getFloat32(offset, true); offset += 4;
   const maxHeight = view.getFloat32(offset, true); offset += 4;
   offset += 4 * 8; // skip bounding sphere center (3 doubles) + radius
   offset += 3 * 8; // skip horizon occlusion point
 
   const vertexCount = view.getUint32(offset, true); offset += 4;
+  if (vertexCount <= 0 || vertexCount > 500000) {
+    throw new Error(`Unexpected vertex count (${vertexCount})`);
+  }
   const uData = decodeDeltaArray(view, offset, vertexCount);
   const vData = decodeDeltaArray(view, uData.offset, vertexCount);
   const hData = decodeDeltaArray(view, vData.offset, vertexCount);
@@ -350,12 +354,50 @@ async function loadTerrainMesh(token: string, lat: number, lon: number, zoom: nu
     positions[i * 3 + 2] = up * scale;
   }
 
+  let minX = positions[0] ?? 0;
+  let maxX = minX;
+  let minY = positions[1] ?? 0;
+  let maxY = minY;
+  let minZ = positions[2] ?? 0;
+  let maxZ = minZ;
+
+  for (let i = 0; i < positions.length; i += 3) {
+    const xVal = positions[i] ?? 0;
+    const yVal = positions[i + 1] ?? 0;
+    const zVal = positions[i + 2] ?? 0;
+    minX = Math.min(minX, xVal);
+    maxX = Math.max(maxX, xVal);
+    minY = Math.min(minY, yVal);
+    maxY = Math.max(maxY, yVal);
+    minZ = Math.min(minZ, zVal);
+    maxZ = Math.max(maxZ, zVal);
+  }
+
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const centerZ = (minZ + maxZ) / 2;
+
+  for (let i = 0; i < positions.length; i += 3) {
+    positions[i] = (positions[i] ?? 0) - centerX;
+    positions[i + 1] = (positions[i + 1] ?? 0) - centerY;
+    positions[i + 2] = (positions[i + 2] ?? 0) - centerZ;
+  }
+
+  let radius = 0;
+  for (let i = 0; i < positions.length; i += 3) {
+    const xVal = positions[i] ?? 0;
+    const yVal = positions[i + 1] ?? 0;
+    const zVal = positions[i + 2] ?? 0;
+    radius = Math.max(radius, Math.hypot(xVal, yVal, zVal));
+  }
+
   const normals = computeNormals(positions, indexData.indices);
 
   return {
     positions,
     normals,
     indices: indexData.indices,
+    radius,
   };
 }
 
@@ -451,15 +493,22 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   const mvpLoc = gl.getUniformLocation(program, "u_mvp");
   const modelLoc = gl.getUniformLocation(program, "u_model");
   const lightLoc = gl.getUniformLocation(program, "u_lightDir");
+  const colorLoc = gl.getUniformLocation(program, "u_color");
 
   const vao = gl.createVertexArray();
   const vbo = gl.createBuffer();
   const nbo = gl.createBuffer();
-  const ibo = gl.createBuffer();
+  const fillIbo = gl.createBuffer();
+  const wireIbo = gl.createBuffer();
 
   let indexCount = 0;
+  let wireIndexCount = 0;
+  let indexType: number = gl.UNSIGNED_SHORT;
+  let wireIndexType: number = gl.UNSIGNED_SHORT;
+  let meshRadius = 1;
   let meshReady = false;
   let animationId: number | null = null;
+  let showWireframe = true;
 
   const resize = () => {
     const dpr = window.devicePixelRatio || 1;
@@ -476,6 +525,29 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   const load = async () => {
     const mesh = await loadTerrainMesh(token, 46.8523, -121.7603, 8);
     indexCount = mesh.indices.length;
+    meshRadius = Math.max(mesh.radius, 0.001);
+    const needsUint32 = mesh.positions.length / 3 > 65535;
+    indexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+    const indexData = needsUint32 ? mesh.indices : new Uint16Array(mesh.indices);
+
+    const triangleCount = Math.floor(mesh.indices.length / 3);
+    const lineIndexTotal = triangleCount * 6;
+    wireIndexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+    const wireIndices = needsUint32 ? new Uint32Array(lineIndexTotal) : new Uint16Array(lineIndexTotal);
+    let wi = 0;
+    for (let i = 0; i < triangleCount; i++) {
+      const base = i * 3;
+      const a = mesh.indices[base] ?? 0;
+      const b = mesh.indices[base + 1] ?? 0;
+      const c = mesh.indices[base + 2] ?? 0;
+      wireIndices[wi++] = a;
+      wireIndices[wi++] = b;
+      wireIndices[wi++] = b;
+      wireIndices[wi++] = c;
+      wireIndices[wi++] = c;
+      wireIndices[wi++] = a;
+    }
+    wireIndexCount = wireIndices.length;
 
     gl.bindVertexArray(vao);
 
@@ -489,8 +561,11 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     gl.enableVertexAttribArray(normalLoc);
     gl.vertexAttribPointer(normalLoc, 3, gl.FLOAT, false, 0, 0);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fillIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, wireIndices, gl.STATIC_DRAW);
 
     gl.bindVertexArray(null);
     meshReady = true;
@@ -499,7 +574,14 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
   void load();
 
   gl.enable(gl.DEPTH_TEST);
-  gl.enable(gl.CULL_FACE);
+  gl.disable(gl.CULL_FACE);
+  gl.lineWidth(1);
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() === "w") {
+      showWireframe = !showWireframe;
+    }
+  });
 
   const render = (time: number) => {
     resize();
@@ -509,8 +591,11 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
     if (meshReady) {
       const elapsed = time / 1000;
       const aspect = canvas.width / canvas.height;
-      const projection = mat4Perspective(Math.PI / 3.5, aspect, 0.01, 100);
-      const view = mat4LookAt([0, -2.2, 1.6], [0, 0, 0.2], [0, 0, 1]);
+      const distance = meshRadius * 2.8;
+      const near = Math.max(0.01, distance * 0.02);
+      const far = distance * 10;
+      const projection = mat4Perspective(Math.PI / 3.5, aspect, near, far);
+      const view = mat4LookAt([0, -distance, distance * 0.6], [0, 0, 0], [0, 0, 1]);
       const model = mat4RotateZ(elapsed * 0.1);
       const mvp = mat4Multiply(projection, mat4Multiply(view, model));
 
@@ -518,9 +603,20 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
       gl.uniformMatrix4fv(mvpLoc, false, mvp);
       gl.uniformMatrix4fv(modelLoc, false, model);
       gl.uniform3f(lightLoc, -0.4, -0.6, 1.0);
+      gl.uniform3f(colorLoc, 0.12, 0.45, 0.32);
 
       gl.bindVertexArray(vao);
-      gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(1, 1);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fillIbo);
+      gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+
+      if (showWireframe) {
+        gl.uniform3f(colorLoc, 0.85, 0.95, 1.0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireIbo);
+        gl.drawElements(gl.LINES, wireIndexCount, wireIndexType, 0);
+      }
       gl.bindVertexArray(null);
     }
 
@@ -537,7 +633,8 @@ export function startTerrainPreview(canvas: HTMLCanvasElement): { stop: () => vo
       }
       gl.deleteBuffer(vbo);
       gl.deleteBuffer(nbo);
-      gl.deleteBuffer(ibo);
+      gl.deleteBuffer(fillIbo);
+      gl.deleteBuffer(wireIbo);
       if (vao) gl.deleteVertexArray(vao);
       gl.deleteProgram(program);
     },
