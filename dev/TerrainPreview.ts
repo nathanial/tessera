@@ -25,6 +25,7 @@ uniform mat4 u_model;
 uniform vec3 u_lightDir;
 uniform float u_lightMix;
 out float v_light;
+out float v_skirt;
 out vec2 v_uv;
 out vec2 v_tessera;
 void main() {
@@ -34,6 +35,7 @@ void main() {
   float lit = mix(1.0, lighting, u_lightMix);
   float skirtLight = max(lit, ${SKIRT_LIGHT_MIN});
   v_light = mix(lit, skirtLight, a_skirt);
+  v_skirt = a_skirt;
   v_uv = a_uv;
   v_tessera = a_tessera;
   gl_Position = u_mvp * vec4(a_position, 1.0);
@@ -43,6 +45,7 @@ void main() {
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in float v_light;
+in float v_skirt;
 in vec2 v_uv;
 in vec2 v_tessera;
 uniform sampler2D u_texture;
@@ -51,8 +54,12 @@ uniform vec3 u_color;
 uniform int u_clipCount;
 uniform vec4 u_clipRect0;
 uniform vec4 u_clipRect1;
+uniform float u_skirtCut;
 out vec4 fragColor;
 void main() {
+  if (u_skirtCut > 0.5 && v_skirt > 0.5) {
+    discard;
+  }
   if (u_clipCount > 0) {
     bool inside = v_tessera.x >= u_clipRect0.x && v_tessera.x <= u_clipRect0.z &&
       v_tessera.y >= u_clipRect0.y && v_tessera.y <= u_clipRect0.w;
@@ -148,11 +155,17 @@ const AIRCRAFT_SCREEN_SIZE = 15;
 const AIRCRAFT_FULL_SIZE_ZOOM = 8;
 const AIRCRAFT_MIN_SIZE = 3;
 const AIRCRAFT_ALTITUDE_OFFSET = 60;
+const DETAIL_BLEND_BAND_PX = 80;
+const GLOBAL_CLIP_ENABLED = false;
 const AREA_OVERLAY_HEIGHT_METERS = 0;
 const IDENTITY_MAT3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
 type ScreenPoint = { x: number; y: number };
 type ProjectToScreen = (x: number, y: number) => ScreenPoint | null;
+
+interface HeightSampler {
+  sample: (x: number, y: number) => number | null;
+}
 
 const toCssColor = (color: [number, number, number, number]): string => {
   const r = Math.round(clamp(color[0] ?? 0, 0, 1) * 255);
@@ -946,6 +959,115 @@ function computeClipRects(bounds: { left: number; right: number; top: number; bo
   ];
 }
 
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  if (edge0 === edge1) return x >= edge1 ? 1 : 0;
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function computeViewWidth(bounds: { left: number; right: number }): number {
+  const width = bounds.right - bounds.left;
+  if (width >= 0) return width;
+  return 1 + width;
+}
+
+function distanceToClipRects(
+  x: number,
+  y: number,
+  rects: Array<[number, number, number, number]>
+): number {
+  if (rects.length === 0) return 0;
+  const wrap01 = (value: number) => ((value % 1) + 1) % 1;
+  const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+  const xx = wrap01(x);
+  const yy = clamp01(y);
+  let best = Infinity;
+  for (const rect of rects) {
+    const left = rect[0];
+    const top = rect[1];
+    const right = rect[2];
+    const bottom = rect[3];
+    if (xx < left || xx > right || yy < top || yy > bottom) continue;
+    const dist = Math.min(xx - left, right - xx, yy - top, bottom - yy);
+    if (dist < best) best = dist;
+  }
+  return Number.isFinite(best) ? best : 0;
+}
+
+function buildGlobalHeightSampler(mesh: TerrainMesh): HeightSampler {
+  const coords = mesh.tesseraCoords;
+  const positions = mesh.positions;
+  const indices = mesh.indices;
+  const gridSize = 128;
+  const cellSize = 1 / gridSize;
+  const grid: number[][] = Array.from({ length: gridSize * gridSize }, () => []);
+
+  for (let i = 0; i < indices.length; i += 3) {
+    const i0 = indices[i] ?? 0;
+    const i1 = indices[i + 1] ?? 0;
+    const i2 = indices[i + 2] ?? 0;
+    const x0 = coords[i0 * 2] ?? 0;
+    const y0 = coords[i0 * 2 + 1] ?? 0;
+    const x1 = coords[i1 * 2] ?? 0;
+    const y1 = coords[i1 * 2 + 1] ?? 0;
+    const x2 = coords[i2 * 2] ?? 0;
+    const y2 = coords[i2 * 2 + 1] ?? 0;
+
+    const minX = Math.min(x0, x1, x2);
+    const maxX = Math.max(x0, x1, x2);
+    const minY = Math.min(y0, y1, y2);
+    const maxY = Math.max(y0, y1, y2);
+
+    const startX = Math.max(0, Math.floor(minX / cellSize));
+    const endX = Math.min(gridSize - 1, Math.floor(maxX / cellSize));
+    const startY = Math.max(0, Math.floor(minY / cellSize));
+    const endY = Math.min(gridSize - 1, Math.floor(maxY / cellSize));
+
+    for (let gy = startY; gy <= endY; gy++) {
+      for (let gx = startX; gx <= endX; gx++) {
+        grid[gy * gridSize + gx]!.push(i);
+      }
+    }
+  }
+
+  return {
+    sample: (x: number, y: number) => {
+      const wrap01 = (value: number) => ((value % 1) + 1) % 1;
+      const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+      const xx = wrap01(x);
+      const yy = clamp01(y);
+      const gx = Math.max(0, Math.min(gridSize - 1, Math.floor(xx / cellSize)));
+      const gy = Math.max(0, Math.min(gridSize - 1, Math.floor(yy / cellSize)));
+      const cell = grid[gy * gridSize + gx];
+      if (!cell) return null;
+
+      for (const triOffset of cell) {
+        const i0 = indices[triOffset] ?? 0;
+        const i1 = indices[triOffset + 1] ?? 0;
+        const i2 = indices[triOffset + 2] ?? 0;
+        const x0 = coords[i0 * 2] ?? 0;
+        const y0 = coords[i0 * 2 + 1] ?? 0;
+        const x1 = coords[i1 * 2] ?? 0;
+        const y1 = coords[i1 * 2 + 1] ?? 0;
+        const x2 = coords[i2 * 2] ?? 0;
+        const y2 = coords[i2 * 2 + 1] ?? 0;
+        const denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+        if (Math.abs(denom) < 1e-12) continue;
+        const w0 = ((y1 - y2) * (xx - x2) + (x2 - x1) * (yy - y2)) / denom;
+        const w1 = ((y2 - y0) * (xx - x2) + (x0 - x2) * (yy - y2)) / denom;
+        const w2 = 1 - w0 - w1;
+        if (w0 < -1e-5 || w1 < -1e-5 || w2 < -1e-5) continue;
+
+        const z0 = positions[i0 * 3 + 2] ?? 0;
+        const z1 = positions[i1 * 3 + 2] ?? 0;
+        const z2 = positions[i2 * 3 + 2] ?? 0;
+        return w0 * z0 + w1 * z1 + w2 * z2;
+      }
+      return null;
+    },
+  };
+}
+
 function computeNormals(positions: Float32Array, indices: Uint32Array): Float32Array {
   const normals = new Float32Array(positions.length);
 
@@ -1521,6 +1643,7 @@ export function startTerrainPreview(
   const colorLoc = gl.getUniformLocation(program, "u_color");
   const textureLoc = gl.getUniformLocation(program, "u_texture");
   const textureMixLoc = gl.getUniformLocation(program, "u_textureMix");
+  const skirtCutLoc = gl.getUniformLocation(program, "u_skirtCut");
 
   const aircraftProgram = createProgramWithSource(gl, AIRCRAFT_VERTEX_SHADER, AIRCRAFT_FRAGMENT_SHADER);
   const aircraftShapeLoc = gl.getAttribLocation(aircraftProgram, "a_shape");
@@ -1587,9 +1710,15 @@ export function startTerrainPreview(
   let userAdjustedCamera = false;
   let aircraftList: Aircraft[] = [];
   let areasState: EditableAreasState | null = null;
+  let detailMeshData: TerrainMesh | null = null;
+  let detailBasePositions: Float32Array | null = null;
+  let detailBlendView: TerrainView | null = null;
+  let detailClipBounds: { left: number; right: number; top: number; bottom: number } | null = null;
+  let globalHeightSampler: HeightSampler | null = null;
   let meshReference: TerrainReference | null = null;
   let meshOffset: [number, number, number] = [0, 0, 0];
   let meshScale = 1;
+  let autoFitPending = false;
 
   if (fallbackTexture) {
     gl.bindTexture(gl.TEXTURE_2D, fallbackTexture);
@@ -1688,7 +1817,8 @@ export function startTerrainPreview(
     meshScale = mesh.scale;
     minDistance = detailMeshRadius * 0.25;
     maxDistance = detailMeshRadius * 10;
-    if (!detailMeshReady || !userAdjustedCamera) {
+    const shouldAutoFit = autoFitPending || !userAdjustedCamera;
+    if (!detailMeshReady || shouldAutoFit) {
       const aspect = canvas.width > 0 ? canvas.width / Math.max(1, canvas.height) : 1;
       const tanHalfFov = Math.tan(FOV / 2);
       const fitHeight = detailMeshHalfHeight / Math.max(1e-6, tanHalfFov);
@@ -1697,6 +1827,7 @@ export function startTerrainPreview(
     } else {
       distance = clamp(distance, minDistance, maxDistance);
     }
+    autoFitPending = false;
     const needsUint32 = mesh.positions.length / 3 > 65535;
     detailIndexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     const indexData = needsUint32 ? mesh.indices : new Uint16Array(mesh.indices);
@@ -1788,6 +1919,8 @@ export function startTerrainPreview(
 
     gl.bindVertexArray(null);
     globalMeshReady = true;
+    globalHeightSampler = buildGlobalHeightSampler(mesh);
+    blendDetailToGlobal();
 
     void (async () => {
       const rasterZoom = Math.max(0, tileZoom + RASTER_ZOOM_OFFSET);
@@ -1814,6 +1947,7 @@ export function startTerrainPreview(
       const mesh = await loadTerrainMesh(token, centerLat, centerLon, tileZoom, bounds, layer);
       if (currentLoadId !== loadId) return null;
       detailTextureReady = false;
+      autoFitPending = true;
       applyMesh(mesh, tileZoom);
       return mesh;
     } catch {
@@ -1860,6 +1994,8 @@ export function startTerrainPreview(
   };
 
   const applyView = async (view: TerrainView) => {
+    globalHeightSampler = null;
+    detailClipBounds = null;
     const center = tesseraToLonLat(view.centerX, view.centerY);
     const west = tesseraToLonLat(view.bounds.left, view.centerY).lon;
     const east = tesseraToLonLat(view.bounds.right, view.centerY).lon;
@@ -1884,6 +2020,34 @@ export function startTerrainPreview(
     }
     const detailMesh = await loadDetail(center.lat, center.lon, tileZoom, lonLatBounds);
     if (detailMesh) {
+      detailMeshData = detailMesh;
+      detailBasePositions = detailMesh.positions.slice();
+      detailBlendView = {
+        centerX: view.centerX,
+        centerY: view.centerY,
+        zoom: view.zoom,
+        viewportWidth: view.viewportWidth,
+        viewportHeight: view.viewportHeight,
+        bounds: { ...view.bounds },
+      };
+      const meshBounds = getTesseraBounds(detailMesh.tesseraCoords);
+      const meshSpan = meshBounds.maxX - meshBounds.minX;
+      const viewSpan = computeViewWidth(view.bounds);
+      let left = meshBounds.minX;
+      let right = meshBounds.maxX;
+      if (meshSpan > 0.5 && viewSpan < 0.5) {
+        left = meshBounds.maxX;
+        right = meshBounds.minX;
+      }
+      detailClipBounds = {
+        left,
+        right,
+        top: meshBounds.minY,
+        bottom: meshBounds.maxY,
+      };
+      if (globalHeightSampler) {
+        blendDetailToGlobal();
+      }
       await loadGlobal(center.lat, center.lon, detailMesh.offset);
     }
   };
@@ -1918,6 +2082,70 @@ export function startTerrainPreview(
 
   const setAreas = (state: EditableAreasState | null) => {
     areasState = state;
+  };
+
+  const blendDetailToGlobal = () => {
+    if (
+      !detailMeshData ||
+      !detailBlendView ||
+      !detailClipBounds ||
+      !globalHeightSampler ||
+      !detailMeshReady ||
+      !detailBasePositions
+    ) {
+      return;
+    }
+
+    const mesh = detailMeshData;
+    const positions = mesh.positions;
+    const coords = mesh.tesseraCoords;
+    const skirtMask = mesh.skirtMask;
+
+    positions.set(detailBasePositions);
+
+    const bounds = detailClipBounds;
+    const clipWidth = computeViewWidth(bounds);
+    const viewWidth = computeViewWidth(detailBlendView.bounds);
+    const worldPerPixel = viewWidth / Math.max(1, detailBlendView.viewportWidth);
+    const blendWidth = Math.min(clipWidth * 0.25, worldPerPixel * DETAIL_BLEND_BAND_PX);
+    if (blendWidth <= 0) return;
+
+    const clipRects = computeClipRects(bounds);
+    if (clipRects.length === 0) return;
+    const skirtEpsilon = Math.max(1e-6, mesh.radius * 1e-4);
+
+    for (let i = 0; i < positions.length / 3; i++) {
+      const tx = coords[i * 2] ?? 0;
+      const ty = coords[i * 2 + 1] ?? 0;
+      const dist = distanceToClipRects(tx, ty, clipRects);
+      const globalZ = globalHeightSampler.sample(tx, ty);
+      if (globalZ === null) continue;
+      const zIndex = i * 3 + 2;
+      if ((skirtMask[i] ?? 0) > 0) {
+        positions[zIndex] = globalZ - skirtEpsilon;
+        continue;
+      }
+      if (dist >= blendWidth) continue;
+      const detailZ = positions[zIndex] ?? 0;
+      const t = smoothstep(0, blendWidth, dist);
+      positions[zIndex] = globalZ * (1 - t) + detailZ * t;
+    }
+
+    const blendedNormals = computeNormals(positions, mesh.indices);
+    for (let i = 0; i < skirtMask.length; i++) {
+      if ((skirtMask[i] ?? 0) > 0) {
+        const base = i * 3;
+        blendedNormals[base] = 0;
+        blendedNormals[base + 1] = 0;
+        blendedNormals[base + 2] = 1;
+      }
+    }
+    mesh.normals = blendedNormals;
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
+    gl.bufferData(gl.ARRAY_BUFFER, blendedNormals, gl.STATIC_DRAW);
   };
 
   void (async () => {
@@ -2039,8 +2267,9 @@ export function startTerrainPreview(
       const view = mat4LookAt(getEye(), target, [0, 0, 1]);
       const model = mat4Identity();
       const mvp = mat4Multiply(projection, mat4Multiply(view, model));
-      const clipRects = currentView ? computeClipRects(currentView.bounds) : [];
-      const clipCount = Math.min(2, clipRects.length);
+      const clipSource = detailClipBounds ?? currentView?.bounds ?? null;
+      const clipRects = clipSource ? computeClipRects(clipSource) : [];
+      const clipCount = GLOBAL_CLIP_ENABLED ? Math.min(2, clipRects.length) : 0;
 
       gl.useProgram(program);
       gl.uniformMatrix4fv(mvpLoc, false, mvp);
@@ -2049,6 +2278,7 @@ export function startTerrainPreview(
       gl.uniform1f(lightMixLoc, 1);
       gl.uniform3f(colorLoc, 0.3, 0.7, 0.55);
       gl.uniform1i(textureLoc, 0);
+      gl.uniform1f(skirtCutLoc, 0);
 
       gl.enable(gl.POLYGON_OFFSET_FILL);
       gl.polygonOffset(1, 1);
@@ -2080,6 +2310,7 @@ export function startTerrainPreview(
       gl.uniform1f(textureMixLoc, detailTextureReady ? 1 : 0);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, detailTextureReady ? detailAtlas?.texture ?? fallbackTexture : fallbackTexture);
+      gl.uniform1f(skirtCutLoc, 1);
 
       gl.bindVertexArray(vao);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, fillIbo);
