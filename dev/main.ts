@@ -2210,6 +2210,7 @@ tessera.render = function () {
       bounds: activeBounds,
     });
     terrainPreview?.setAircraft(aircraftRenderer.aircraft);
+    terrainPreview?.setAreas(editableAreasState);
 
     const minimapW = MINIMAP_WIDTH * uiScale;
     const minimapH = MINIMAP_HEIGHT * uiScale;

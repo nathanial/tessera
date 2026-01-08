@@ -1,8 +1,11 @@
 import { TILE_SIZE } from "../src/constants";
 import { lonLatToTessera, tesseraToLonLat } from "../src/geo/projection";
+import type { DrawContext } from "../src/index";
 import type { Aircraft } from "./adsb";
 import { getAltitudeColor } from "./adsb";
 import { getWrappedX } from "./CoordinateUtils";
+import type { EditableAreasState } from "./EditableAreas";
+import { renderEditableAreas } from "./EditableAreas";
 import { LabelPlacer, type LabelItem } from "./labels";
 
 const LABEL_FONT_SIZE = 18;
@@ -145,6 +148,172 @@ const AIRCRAFT_SCREEN_SIZE = 15;
 const AIRCRAFT_FULL_SIZE_ZOOM = 8;
 const AIRCRAFT_MIN_SIZE = 3;
 const AIRCRAFT_ALTITUDE_OFFSET = 60;
+const AREA_OVERLAY_HEIGHT_METERS = 0;
+const IDENTITY_MAT3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+type ScreenPoint = { x: number; y: number };
+type ProjectToScreen = (x: number, y: number) => ScreenPoint | null;
+
+const toCssColor = (color: [number, number, number, number]): string => {
+  const r = Math.round(clamp(color[0] ?? 0, 0, 1) * 255);
+  const g = Math.round(clamp(color[1] ?? 0, 0, 1) * 255);
+  const b = Math.round(clamp(color[2] ?? 0, 0, 1) * 255);
+  const a = clamp(color[3] ?? 1, 0, 1);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+};
+
+class ProjectedCanvasDraw {
+  private ctx: CanvasRenderingContext2D;
+  private project: ProjectToScreen;
+  private pathOpen = false;
+  private pathHasPoint = false;
+  private fillValue: [number, number, number, number] = [1, 1, 1, 1];
+  private strokeValue: [number, number, number, number] = [1, 1, 1, 1];
+  private lineValue = 1;
+
+  constructor(ctx: CanvasRenderingContext2D, project: ProjectToScreen) {
+    this.ctx = ctx;
+    this.project = project;
+  }
+
+  set fillStyle(color: [number, number, number, number]) {
+    this.fillValue = color;
+    this.ctx.fillStyle = toCssColor(color);
+  }
+
+  get fillStyle(): [number, number, number, number] {
+    return this.fillValue;
+  }
+
+  set strokeStyle(color: [number, number, number, number]) {
+    this.strokeValue = color;
+    this.ctx.strokeStyle = toCssColor(color);
+  }
+
+  get strokeStyle(): [number, number, number, number] {
+    return this.strokeValue;
+  }
+
+  set lineWidth(width: number) {
+    this.lineValue = width;
+    this.ctx.lineWidth = width;
+  }
+
+  get lineWidth(): number {
+    return this.lineValue;
+  }
+
+  save(): void {
+    this.ctx.save();
+  }
+
+  restore(): void {
+    this.ctx.restore();
+  }
+
+  beginPath(): void {
+    this.ctx.beginPath();
+    this.pathOpen = false;
+    this.pathHasPoint = false;
+  }
+
+  moveTo(x: number, y: number): void {
+    const point = this.project(x, y);
+    if (!point) {
+      this.pathOpen = false;
+      return;
+    }
+    this.ctx.moveTo(point.x, point.y);
+    this.pathOpen = true;
+    this.pathHasPoint = true;
+  }
+
+  lineTo(x: number, y: number): void {
+    const point = this.project(x, y);
+    if (!point) {
+      this.pathOpen = false;
+      return;
+    }
+    if (!this.pathOpen) {
+      this.ctx.moveTo(point.x, point.y);
+    } else {
+      this.ctx.lineTo(point.x, point.y);
+    }
+    this.pathOpen = true;
+    this.pathHasPoint = true;
+  }
+
+  arc(
+    x: number,
+    y: number,
+    radius: number,
+    startAngle: number,
+    endAngle: number,
+    counterclockwise = false
+  ): void {
+    const span = counterclockwise ? startAngle - endAngle : endAngle - startAngle;
+    const steps = Math.max(8, Math.ceil(Math.abs(span) / (Math.PI / 16)));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const angle = startAngle + span * t;
+      const px = x + Math.cos(angle) * radius;
+      const py = y + Math.sin(angle) * radius;
+      if (i === 0) {
+        this.moveTo(px, py);
+      } else {
+        this.lineTo(px, py);
+      }
+    }
+  }
+
+  closePath(): void {
+    if (this.pathOpen) {
+      this.ctx.closePath();
+    }
+  }
+
+  fill(): void {
+    if (this.pathHasPoint) {
+      this.ctx.fill();
+    }
+  }
+
+  stroke(): void {
+    if (this.pathHasPoint) {
+      this.ctx.stroke();
+    }
+  }
+
+  fillRect(x: number, y: number, width: number, height: number): void {
+    const p0 = this.project(x, y);
+    const p1 = this.project(x + width, y);
+    const p2 = this.project(x + width, y + height);
+    const p3 = this.project(x, y + height);
+    if (!p0 || !p1 || !p2 || !p3) return;
+    this.ctx.beginPath();
+    this.ctx.moveTo(p0.x, p0.y);
+    this.ctx.lineTo(p1.x, p1.y);
+    this.ctx.lineTo(p2.x, p2.y);
+    this.ctx.lineTo(p3.x, p3.y);
+    this.ctx.closePath();
+    this.ctx.fill();
+  }
+
+  strokeRect(x: number, y: number, width: number, height: number): void {
+    const p0 = this.project(x, y);
+    const p1 = this.project(x + width, y);
+    const p2 = this.project(x + width, y + height);
+    const p3 = this.project(x, y + height);
+    if (!p0 || !p1 || !p2 || !p3) return;
+    this.ctx.beginPath();
+    this.ctx.moveTo(p0.x, p0.y);
+    this.ctx.lineTo(p1.x, p1.y);
+    this.ctx.lineTo(p2.x, p2.y);
+    this.ctx.lineTo(p3.x, p3.y);
+    this.ctx.closePath();
+    this.ctx.stroke();
+  }
+}
 
 interface TerrainLayer {
   tiles: string[];
@@ -1306,6 +1475,7 @@ export function startTerrainPreview(
   resize: () => void;
   setView: (view: TerrainView) => void;
   setAircraft: (aircraft: Aircraft[]) => void;
+  setAreas: (state: EditableAreasState | null) => void;
 } {
   const gl = canvas.getContext("webgl2", { antialias: true, alpha: true });
   if (!gl) {
@@ -1416,6 +1586,7 @@ export function startTerrainPreview(
   let globalLoadId = 0;
   let userAdjustedCamera = false;
   let aircraftList: Aircraft[] = [];
+  let areasState: EditableAreasState | null = null;
   let meshReference: TerrainReference | null = null;
   let meshOffset: [number, number, number] = [0, 0, 0];
   let meshScale = 1;
@@ -1745,6 +1916,10 @@ export function startTerrainPreview(
     aircraftList = aircraft;
   };
 
+  const setAreas = (state: EditableAreasState | null) => {
+    areasState = state;
+  };
+
   void (async () => {
     const detailMesh = await loadDetail(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
     if (detailMesh) {
@@ -1913,6 +2088,38 @@ export function startTerrainPreview(
       gl.disable(gl.POLYGON_OFFSET_FILL);
 
       gl.bindVertexArray(null);
+
+      if (
+        labelCtx &&
+        labelCanvas &&
+        areasState &&
+        areasState.enabled &&
+        currentView &&
+        meshReference
+      ) {
+        const project = (x: number, y: number) => {
+          const pos = projectTesseraToEnu(
+            x,
+            y,
+            AREA_OVERLAY_HEIGHT_METERS,
+            meshReference,
+            meshScale,
+            meshOffset
+          );
+          return projectToScreen(pos, mvp, canvas.width, canvas.height);
+        };
+        const areaDraw = new ProjectedCanvasDraw(labelCtx, project);
+        renderEditableAreas(
+          areaDraw as unknown as DrawContext,
+          IDENTITY_MAT3,
+          currentView.viewportWidth,
+          currentView.viewportHeight,
+          currentView.bounds,
+          time / 1000,
+          areasState,
+          null
+        );
+      }
 
       const labelItems: LabelItem[] = [];
       let labelOffsetPx = 12;
@@ -2135,5 +2342,6 @@ export function startTerrainPreview(
     resize,
     setView,
     setAircraft,
+    setAreas,
   };
 }
