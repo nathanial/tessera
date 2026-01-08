@@ -149,11 +149,11 @@ const AIRCRAFT_FULL_SIZE_ZOOM = 8;
 const AIRCRAFT_MIN_SIZE = 3;
 const AIRCRAFT_ALTITUDE_OFFSET = 60;
 const DETAIL_BLEND_BAND_PX = 80;
-const GLOBAL_CLIP_ENABLED = false;
 const LOD_MIN_ZOOM = 0;
 const LOD_DETAIL_ZOOM_GAP = 1;
 const LOD_MAX_TILES = 96;
 const LOD_SPLIT_RATIO = 2.5;
+const LOD_EDGE_BLEND_FRACTION = 0.2;
 const AREA_OVERLAY_HEIGHT_METERS = 0;
 const IDENTITY_MAT3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
@@ -179,6 +179,8 @@ interface LodMeshState {
   atlas: RasterAtlas | null;
   textureReady: boolean;
   loadId: number;
+  meshData: TerrainMesh | null;
+  basePositions: Float32Array | null;
 }
 
 const toCssColor = (color: [number, number, number, number]): string => {
@@ -355,6 +357,7 @@ interface TerrainMesh {
   indices: Uint32Array;
   tesseraCoords: Float32Array;
   skirtMask: Float32Array;
+  edgeDistance: Float32Array;
   radius: number;
   halfWidth: number;
   halfHeight: number;
@@ -383,6 +386,7 @@ interface DecodedTile {
   tesseraCoords: Float32Array<ArrayBuffer>;
   skirtMask: Float32Array<ArrayBuffer>;
   edgeIndices: Uint32Array<ArrayBuffer>;
+  edgeDistance: Float32Array<ArrayBuffer>;
 }
 
 interface TerrainReference {
@@ -879,6 +883,44 @@ function tileCenterLonLat(
     lon: (bounds.west + bounds.east) * 0.5,
     lat: (bounds.south + bounds.north) * 0.5,
   };
+}
+
+function tileTesseraBounds(
+  x: number,
+  y: number,
+  zoom: number,
+  projection: string,
+  scheme: "tms" | "xyz"
+): { minX: number; maxX: number; minY: number; maxY: number } {
+  const bounds = tileBounds(x, y, zoom, projection, scheme);
+  const corners =
+    projection === "EPSG:3857"
+      ? [
+        mercatorToLonLat(bounds.west, bounds.south),
+        mercatorToLonLat(bounds.east, bounds.south),
+        mercatorToLonLat(bounds.east, bounds.north),
+        mercatorToLonLat(bounds.west, bounds.north),
+      ].map((corner) => ({ lon: corner.lonDeg, lat: corner.latDeg }))
+      : [
+        { lon: bounds.west, lat: bounds.south },
+        { lon: bounds.east, lat: bounds.south },
+        { lon: bounds.east, lat: bounds.north },
+        { lon: bounds.west, lat: bounds.north },
+      ];
+
+  let minX = 1;
+  let maxX = 0;
+  let minY = 1;
+  let maxY = 0;
+  for (const corner of corners) {
+    const tessera = lonLatToTessera(corner.lon, corner.lat);
+    minX = Math.min(minX, tessera.x);
+    maxX = Math.max(maxX, tessera.x);
+    minY = Math.min(minY, tessera.y);
+    maxY = Math.max(maxY, tessera.y);
+  }
+
+  return { minX, maxX, minY, maxY };
 }
 
 function computeTileMetrics(
@@ -1441,6 +1483,7 @@ async function loadTerrainMesh(
       const heightRange = decoded.maxHeight - decoded.minHeight;
       const skirtHeight = Math.max(30, heightRange * 0.1);
       const skirtDepth = skirtHeight * scale;
+      const tesseraBounds = tileTesseraBounds(coord.x, coord.y, zoom, projection, scheme);
 
       for (let i = 0; i < decoded.vertexCount; i++) {
         const u = (decoded.u[i] ?? 0) / QUANTIZED_MAX;
@@ -1522,7 +1565,19 @@ async function loadTerrainMesh(
         addSkirt(edge);
       }
 
-      return { positions, indices, tesseraCoords, skirtMask, edgeIndices } satisfies DecodedTile;
+      const edgeDistance = new Float32Array(totalVertexCount);
+      for (let i = 0; i < totalVertexCount; i++) {
+        const tx = tesseraCoords[i * 2] ?? 0;
+        const ty = tesseraCoords[i * 2 + 1] ?? 0;
+        let dist = Number.POSITIVE_INFINITY;
+        if (!hasWest) dist = Math.min(dist, tx - tesseraBounds.minX);
+        if (!hasEast) dist = Math.min(dist, tesseraBounds.maxX - tx);
+        if (!hasNorth) dist = Math.min(dist, ty - tesseraBounds.minY);
+        if (!hasSouth) dist = Math.min(dist, tesseraBounds.maxY - ty);
+        edgeDistance[i] = dist;
+      }
+
+      return { positions, indices, tesseraCoords, skirtMask, edgeIndices, edgeDistance } satisfies DecodedTile;
     } catch {
       return null;
     }
@@ -1543,6 +1598,7 @@ async function loadTerrainMesh(
   const tesseraCoords = new Float32Array(totalVertices * 2);
   const indices = new Uint32Array(totalIndices);
   const skirtMask = new Float32Array(totalVertices);
+  const edgeDistance = new Float32Array(totalVertices);
   const edgeGroups = new Map<
     string,
     { sumX: number; sumY: number; sumZ: number; count: number; indices: number[] }
@@ -1554,6 +1610,7 @@ async function loadTerrainMesh(
     positions.set(tile.positions, vertexOffset * 3);
     tesseraCoords.set(tile.tesseraCoords, vertexOffset * 2);
     skirtMask.set(tile.skirtMask, vertexOffset);
+    edgeDistance.set(tile.edgeDistance, vertexOffset);
     for (let i = 0; i < tile.indices.length; i++) {
       indices[indexOffset + i] = (tile.indices[i] ?? 0) + vertexOffset;
     }
@@ -1655,6 +1712,7 @@ async function loadTerrainMesh(
     indices,
     tesseraCoords,
     skirtMask,
+    edgeDistance,
     radius,
     halfWidth,
     halfHeight,
@@ -1871,6 +1929,8 @@ export function startTerrainPreview(
     atlas: null,
     textureReady: false,
     loadId: 0,
+    meshData: null,
+    basePositions: null,
   });
   const getLodState = (zoom: number): LodMeshState => {
     const existing = lodMeshes.get(zoom);
@@ -2079,7 +2139,7 @@ export function startTerrainPreview(
     })();
   };
 
-  const applyLodMesh = (lodMesh: LodMeshState, mesh: TerrainMesh, tileZoom: number, blendSource: boolean) => {
+  const applyLodMesh = (lodMesh: LodMeshState, mesh: TerrainMesh, tileZoom: number) => {
     lodMesh.indexCount = mesh.indices.length;
     lodMesh.meshReady = false;
     const needsUint32 = mesh.positions.length / 3 > 65535;
@@ -2119,11 +2179,8 @@ export function startTerrainPreview(
 
     gl.bindVertexArray(null);
     lodMesh.meshReady = true;
-
-    if (blendSource) {
-      lodHeightSampler = buildGlobalHeightSampler(mesh);
-      blendDetailToGlobal();
-    }
+    lodMesh.meshData = mesh;
+    lodMesh.basePositions = mesh.positions.slice();
 
     void (async () => {
       const rasterZoom = Math.max(0, tileZoom + RASTER_ZOOM_OFFSET);
@@ -2196,14 +2253,14 @@ export function startTerrainPreview(
         return state;
       });
 
-    const blendZoom = lodMeshOrder.length > 0 ? lodMeshOrder[lodMeshOrder.length - 1]!.zoom : null;
-
     await Promise.all(
       lodMeshOrder.map(async (lodMesh) => {
         const tiles = lodGroups.get(lodMesh.zoom);
         if (!tiles || tiles.length === 0) {
           lodMesh.meshReady = false;
           lodMesh.textureReady = false;
+          lodMesh.meshData = null;
+          lodMesh.basePositions = null;
           return;
         }
         const currentLoadId = ++lodMesh.loadId;
@@ -2222,12 +2279,14 @@ export function startTerrainPreview(
           if (currentLoadId !== lodMesh.loadId) return;
           if (lodMeshes.get(lodMesh.zoom) !== lodMesh) return;
           lodMesh.textureReady = false;
-          applyLodMesh(lodMesh, mesh, lodMesh.zoom, blendZoom !== null && lodMesh.zoom === blendZoom);
+          applyLodMesh(lodMesh, mesh, lodMesh.zoom);
         } catch {
           // Keep prior mesh if new load fails.
         }
       })
     );
+
+    blendLodMeshes(projection);
   };
 
   const viewsEqual = (a: TerrainView, b: TerrainView) => {
@@ -2297,9 +2356,6 @@ export function startTerrainPreview(
         top: meshBounds.minY,
         bottom: meshBounds.maxY,
       };
-      if (lodHeightSampler) {
-        blendDetailToGlobal();
-      }
       await loadLodMeshes(center, tileZoom, detailMesh.offset, layer);
     }
   };
@@ -2334,6 +2390,96 @@ export function startTerrainPreview(
 
   const setAreas = (state: EditableAreasState | null) => {
     areasState = state;
+  };
+
+  const updateLodBuffers = (lodMesh: LodMeshState, mesh: TerrainMesh) => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.positions, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.nbo);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.normals, gl.STATIC_DRAW);
+  };
+
+  const blendMeshToCoarser = (
+    mesh: TerrainMesh,
+    basePositions: Float32Array,
+    sampler: HeightSampler,
+    blendWidth: number
+  ) => {
+    const positions = mesh.positions;
+    const coords = mesh.tesseraCoords;
+    const skirtMask = mesh.skirtMask;
+    const edgeDistance = mesh.edgeDistance;
+    const skirtEpsilon = Math.max(1e-6, mesh.radius * 1e-4);
+
+    positions.set(basePositions);
+
+    for (let i = 0; i < positions.length / 3; i++) {
+      const dist = edgeDistance[i] ?? Number.POSITIVE_INFINITY;
+      if (!Number.isFinite(dist) || dist >= blendWidth) continue;
+      const tx = coords[i * 2] ?? 0;
+      const ty = coords[i * 2 + 1] ?? 0;
+      const coarseZ = sampler.sample(tx, ty);
+      if (coarseZ === null) continue;
+      const zIndex = i * 3 + 2;
+      if ((skirtMask[i] ?? 0) > 0) {
+        positions[zIndex] = coarseZ - skirtEpsilon;
+        continue;
+      }
+      const detailZ = positions[zIndex] ?? 0;
+      const t = smoothstep(0, blendWidth, dist);
+      positions[zIndex] = coarseZ * (1 - t) + detailZ * t;
+    }
+
+    const blendedNormals = computeNormals(positions, mesh.indices);
+    for (let i = 0; i < skirtMask.length; i++) {
+      if ((skirtMask[i] ?? 0) > 0) {
+        const base = i * 3;
+        blendedNormals[base] = 0;
+        blendedNormals[base + 1] = 0;
+        blendedNormals[base + 2] = 1;
+      }
+    }
+    mesh.normals = blendedNormals;
+  };
+
+  const blendLodMeshes = (projection: string) => {
+    if (lodMeshOrder.length === 0) {
+      lodHeightSampler = null;
+      return;
+    }
+
+    let coarseSampler: HeightSampler | null = null;
+    for (const lodMesh of lodMeshOrder) {
+      const mesh = lodMesh.meshData;
+      const basePositions = lodMesh.basePositions;
+      if (!mesh || !basePositions || !lodMesh.meshReady) {
+        continue;
+      }
+      const blendWidth = coarseSampler
+        ? (1 / Math.max(1, tileCounts(projection, lodMesh.zoom).xTiles)) * LOD_EDGE_BLEND_FRACTION
+        : 0;
+      if (coarseSampler && blendWidth > 0) {
+        blendMeshToCoarser(mesh, basePositions, coarseSampler, blendWidth);
+        updateLodBuffers(lodMesh, mesh);
+      } else {
+        mesh.positions.set(basePositions);
+        mesh.normals = computeNormals(mesh.positions, mesh.indices);
+        for (let i = 0; i < mesh.skirtMask.length; i++) {
+          if ((mesh.skirtMask[i] ?? 0) > 0) {
+            const base = i * 3;
+            mesh.normals[base] = 0;
+            mesh.normals[base + 1] = 0;
+            mesh.normals[base + 2] = 1;
+          }
+        }
+        updateLodBuffers(lodMesh, mesh);
+      }
+      coarseSampler = buildGlobalHeightSampler(mesh);
+    }
+
+    const lastMesh = lodMeshOrder[lodMeshOrder.length - 1]?.meshData ?? null;
+    lodHeightSampler = lastMesh ? buildGlobalHeightSampler(lastMesh) : null;
+    blendDetailToGlobal();
   };
 
   const blendDetailToGlobal = () => {
@@ -2541,9 +2687,8 @@ export function startTerrainPreview(
       const view = mat4LookAt(getEye(), target, [0, 0, 1]);
       const model = mat4Identity();
       const mvp = mat4Multiply(projection, mat4Multiply(view, model));
-      const clipSource = detailClipBounds ?? currentView?.bounds ?? null;
-      const clipRects = clipSource ? computeClipRects(clipSource) : [];
-      const clipCount = GLOBAL_CLIP_ENABLED ? Math.min(2, clipRects.length) : 0;
+      const detailClipRects = detailClipBounds ? computeClipRects(detailClipBounds) : [];
+      const lodClipCount = detailClipRects.length > 0 ? Math.min(2, detailClipRects.length) : 0;
 
       gl.useProgram(program);
       gl.uniformMatrix4fv(mvpLoc, false, mvp);
@@ -2559,12 +2704,12 @@ export function startTerrainPreview(
 
       const drawLodMesh = (lodMesh: LodMeshState) => {
         if (!lodMesh.meshReady) return;
-        gl.uniform1i(clipCountLoc, clipCount);
-        if (clipCount > 0) {
-          const rect0 = clipRects[0]!;
+        gl.uniform1i(clipCountLoc, lodClipCount);
+        if (lodClipCount > 0) {
+          const rect0 = detailClipRects[0]!;
           gl.uniform4f(clipRect0Loc, rect0[0], rect0[1], rect0[2], rect0[3]);
-          if (clipCount > 1) {
-            const rect1 = clipRects[1]!;
+          if (lodClipCount > 1) {
+            const rect1 = detailClipRects[1]!;
             gl.uniform4f(clipRect1Loc, rect1[0], rect1[1], rect1[2], rect1[3]);
           } else {
             gl.uniform4f(clipRect1Loc, 0, 0, 0, 0);
