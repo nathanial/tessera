@@ -134,13 +134,6 @@ const FOV = Math.PI / 3.5;
 const RASTER_ZOOM_OFFSET = 0;
 const MAX_RASTER_TILES = 64;
 const LIGHT_DIR: [number, number, number] = [0.1, 0.2, -1.4];
-const GLOBAL_TERRAIN_ZOOM = 3;
-const WORLD_BOUNDS: LonLatBounds = {
-  west: -180,
-  east: 180,
-  south: -85.0511,
-  north: 85.0511,
-};
 const AIRCRAFT_BASE: Array<[number, number]> = [
   [0, 1],
   [-0.5, -0.8],
@@ -157,6 +150,10 @@ const AIRCRAFT_MIN_SIZE = 3;
 const AIRCRAFT_ALTITUDE_OFFSET = 60;
 const DETAIL_BLEND_BAND_PX = 80;
 const GLOBAL_CLIP_ENABLED = false;
+const LOD_MIN_ZOOM = 0;
+const LOD_DETAIL_ZOOM_GAP = 1;
+const LOD_MAX_TILES = 96;
+const LOD_SPLIT_RATIO = 2.5;
 const AREA_OVERLAY_HEIGHT_METERS = 0;
 const IDENTITY_MAT3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
@@ -165,6 +162,23 @@ type ProjectToScreen = (x: number, y: number) => ScreenPoint | null;
 
 interface HeightSampler {
   sample: (x: number, y: number) => number | null;
+}
+
+interface LodMeshState {
+  zoom: number;
+  vao: WebGLVertexArrayObject | null;
+  vbo: WebGLBuffer | null;
+  nbo: WebGLBuffer | null;
+  uvbo: WebGLBuffer | null;
+  skbo: WebGLBuffer | null;
+  tbo: WebGLBuffer | null;
+  ibo: WebGLBuffer | null;
+  indexCount: number;
+  indexType: number;
+  meshReady: boolean;
+  atlas: RasterAtlas | null;
+  textureReady: boolean;
+  loadId: number;
 }
 
 const toCssColor = (color: [number, number, number, number]): string => {
@@ -833,6 +847,161 @@ function computeAtlasUVs(coords: Float32Array, atlas: RasterAtlas): Float32Array
   return uvs;
 }
 
+function enuFromLonLat(lonDeg: number, latDeg: number, reference: TerrainReference): [number, number, number] {
+  const [xEcef, yEcef, zEcef] = lonLatHeightToECEF(lonDeg, latDeg, 0);
+  return ecefToEnu(
+    xEcef,
+    yEcef,
+    zEcef,
+    reference.lonRad,
+    reference.latRad,
+    reference.ecef[0],
+    reference.ecef[1],
+    reference.ecef[2]
+  );
+}
+
+function tileCenterLonLat(
+  x: number,
+  y: number,
+  zoom: number,
+  projection: string,
+  scheme: "tms" | "xyz"
+): { lon: number; lat: number } {
+  const bounds = tileBounds(x, y, zoom, projection, scheme);
+  if (projection === "EPSG:3857") {
+    const mercX = (bounds.west + bounds.east) * 0.5;
+    const mercY = (bounds.south + bounds.north) * 0.5;
+    const lonLat = mercatorToLonLat(mercX, mercY);
+    return { lon: lonLat.lonDeg, lat: lonLat.latDeg };
+  }
+  return {
+    lon: (bounds.west + bounds.east) * 0.5,
+    lat: (bounds.south + bounds.north) * 0.5,
+  };
+}
+
+function computeTileMetrics(
+  x: number,
+  y: number,
+  zoom: number,
+  projection: string,
+  scheme: "tms" | "xyz",
+  reference: TerrainReference
+): { dist: number; size: number } {
+  const bounds = tileBounds(x, y, zoom, projection, scheme);
+  const corners =
+    projection === "EPSG:3857"
+      ? [
+        mercatorToLonLat(bounds.west, bounds.south),
+        mercatorToLonLat(bounds.east, bounds.south),
+        mercatorToLonLat(bounds.east, bounds.north),
+        mercatorToLonLat(bounds.west, bounds.north),
+      ].map((corner) => ({ lon: corner.lonDeg, lat: corner.latDeg }))
+      : [
+        { lon: bounds.west, lat: bounds.south },
+        { lon: bounds.east, lat: bounds.south },
+        { lon: bounds.east, lat: bounds.north },
+        { lon: bounds.west, lat: bounds.north },
+      ];
+
+  const center = tileCenterLonLat(x, y, zoom, projection, scheme);
+  const [centerEast, centerNorth] = enuFromLonLat(center.lon, center.lat, reference);
+
+  let minEast = Infinity;
+  let maxEast = -Infinity;
+  let minNorth = Infinity;
+  let maxNorth = -Infinity;
+  for (const corner of corners) {
+    const [east, north] = enuFromLonLat(corner.lon, corner.lat, reference);
+    minEast = Math.min(minEast, east);
+    maxEast = Math.max(maxEast, east);
+    minNorth = Math.min(minNorth, north);
+    maxNorth = Math.max(maxNorth, north);
+  }
+
+  const width = maxEast - minEast;
+  const height = maxNorth - minNorth;
+  const size = Math.max(1, Math.max(width, height));
+  const dist = Math.hypot(centerEast, centerNorth);
+  return { dist, size };
+}
+
+function buildAdaptiveLodTiles(
+  reference: TerrainReference,
+  maxZoom: number,
+  projection: string,
+  scheme: "tms" | "xyz"
+): Map<number, Array<{ x: number; y: number }>> {
+  type TileEntry = {
+    x: number;
+    y: number;
+    zoom: number;
+    dist: number;
+    size: number;
+    priority: number;
+    key: string;
+  };
+
+  const baseZoom = LOD_MIN_ZOOM;
+  const { xTiles, yTiles } = tileCounts(projection, baseZoom);
+  const leaves = new Map<string, TileEntry>();
+  const candidates: TileEntry[] = [];
+
+  const createEntry = (x: number, y: number, zoom: number): TileEntry => {
+    const metrics = computeTileMetrics(x, y, zoom, projection, scheme, reference);
+    const priority = metrics.dist / Math.max(1, metrics.size);
+    const key = `${zoom}/${x}/${y}`;
+    return { x, y, zoom, dist: metrics.dist, size: metrics.size, priority, key };
+  };
+
+  const shouldSplit = (tile: TileEntry) =>
+    tile.zoom < maxZoom && tile.size > 0 && tile.dist / tile.size < LOD_SPLIT_RATIO;
+
+  for (let y = 0; y < yTiles; y++) {
+    for (let x = 0; x < xTiles; x++) {
+      const entry = createEntry(x, y, baseZoom);
+      leaves.set(entry.key, entry);
+      if (shouldSplit(entry)) candidates.push(entry);
+    }
+  }
+
+  const pickBest = () => {
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.priority - b.priority);
+    return candidates.shift() ?? null;
+  };
+
+  while (candidates.length > 0 && leaves.size + 3 <= LOD_MAX_TILES) {
+    const tile = pickBest();
+    if (!tile) break;
+    if (!leaves.has(tile.key)) continue;
+    if (!shouldSplit(tile)) continue;
+
+    leaves.delete(tile.key);
+    const nextZoom = tile.zoom + 1;
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        const child = createEntry(tile.x * 2 + dx, tile.y * 2 + dy, nextZoom);
+        leaves.set(child.key, child);
+        if (shouldSplit(child)) candidates.push(child);
+      }
+    }
+  }
+
+  const grouped = new Map<number, Array<{ x: number; y: number }>>();
+  for (const tile of leaves.values()) {
+    const list = grouped.get(tile.zoom);
+    if (list) {
+      list.push({ x: tile.x, y: tile.y });
+    } else {
+      grouped.set(tile.zoom, [{ x: tile.x, y: tile.y }]);
+    }
+  }
+
+  return grouped;
+}
+
 function lonLatHeightToECEF(lonDeg: number, latDeg: number, height: number): [number, number, number] {
   const lon = (lonDeg * Math.PI) / 180;
   const lat = (latDeg * Math.PI) / 180;
@@ -1148,7 +1317,8 @@ async function loadTerrainMesh(
   viewBounds?: LonLatBounds,
   layerOverride?: TerrainLayer & { baseUrl: string; accessToken: string },
   referenceOverride?: { lat: number; lon: number },
-  originOffset?: [number, number, number]
+  originOffset?: [number, number, number],
+  tileCoordsOverride?: Array<{ x: number; y: number }>
 ): Promise<TerrainMesh> {
   const layer = layerOverride ?? await fetchIonLayer(token);
   const scheme = layer.scheme ?? "tms";
@@ -1163,7 +1333,13 @@ async function loadTerrainMesh(
   const refLat = (referenceLat * Math.PI) / 180;
 
   const tileCoords: { x: number; y: number }[] = [];
-  if (viewBounds) {
+  if (tileCoordsOverride && tileCoordsOverride.length > 0) {
+    for (const coord of tileCoordsOverride) {
+      if (coord.y < 0 || coord.y >= yTiles) continue;
+      const wrappedX = ((coord.x % xTiles) + xTiles) % xTiles;
+      tileCoords.push({ x: wrappedX, y: coord.y });
+    }
+  } else if (viewBounds) {
     const range = computeTileRangeFromBounds(viewBounds, zoom, projection, scheme);
     for (let y = range.minY; y <= range.maxY; y++) {
       if (y < 0 || y >= range.yTiles) continue;
@@ -1663,13 +1839,6 @@ export function startTerrainPreview(
   const tbo = gl.createBuffer();
   const fillIbo = gl.createBuffer();
   const fallbackTexture = gl.createTexture();
-  const globalVao = gl.createVertexArray();
-  const globalVbo = gl.createBuffer();
-  const globalNbo = gl.createBuffer();
-  const globalUvbo = gl.createBuffer();
-  const globalSkbo = gl.createBuffer();
-  const globalTbo = gl.createBuffer();
-  const globalIbo = gl.createBuffer();
   const aircraftVao = gl.createVertexArray();
   const aircraftShapeBuffer = gl.createBuffer();
   const aircraftNormalBuffer = gl.createBuffer();
@@ -1684,11 +1853,43 @@ export function startTerrainPreview(
   let detailMeshReady = false;
   let detailAtlas: RasterAtlas | null = null;
   let detailTextureReady = false;
-  let globalIndexCount = 0;
-  let globalIndexType: number = gl.UNSIGNED_SHORT;
-  let globalMeshReady = false;
-  let globalAtlas: RasterAtlas | null = null;
-  let globalTextureReady = false;
+  const lodMeshes = new Map<number, LodMeshState>();
+  let lodMeshOrder: LodMeshState[] = [];
+
+  const createLodState = (): LodMeshState => ({
+    zoom: 0,
+    vao: gl.createVertexArray(),
+    vbo: gl.createBuffer(),
+    nbo: gl.createBuffer(),
+    uvbo: gl.createBuffer(),
+    skbo: gl.createBuffer(),
+    tbo: gl.createBuffer(),
+    ibo: gl.createBuffer(),
+    indexCount: 0,
+    indexType: gl.UNSIGNED_SHORT,
+    meshReady: false,
+    atlas: null,
+    textureReady: false,
+    loadId: 0,
+  });
+  const getLodState = (zoom: number): LodMeshState => {
+    const existing = lodMeshes.get(zoom);
+    if (existing) return existing;
+    const state = createLodState();
+    state.zoom = zoom;
+    lodMeshes.set(zoom, state);
+    return state;
+  };
+  const deleteLodState = (state: LodMeshState) => {
+    if (state.vbo) gl.deleteBuffer(state.vbo);
+    if (state.nbo) gl.deleteBuffer(state.nbo);
+    if (state.uvbo) gl.deleteBuffer(state.uvbo);
+    if (state.skbo) gl.deleteBuffer(state.skbo);
+    if (state.tbo) gl.deleteBuffer(state.tbo);
+    if (state.ibo) gl.deleteBuffer(state.ibo);
+    if (state.vao) gl.deleteVertexArray(state.vao);
+    if (state.atlas?.texture) gl.deleteTexture(state.atlas.texture);
+  };
   let animationId: number | null = null;
   let azimuth = Math.PI;
   let elevation = 0.6;
@@ -1706,7 +1907,6 @@ export function startTerrainPreview(
   let currentView: TerrainView | null = null;
   let viewDebounceId: number | null = null;
   let loadId = 0;
-  let globalLoadId = 0;
   let userAdjustedCamera = false;
   let aircraftList: Aircraft[] = [];
   let areasState: EditableAreasState | null = null;
@@ -1714,7 +1914,7 @@ export function startTerrainPreview(
   let detailBasePositions: Float32Array | null = null;
   let detailBlendView: TerrainView | null = null;
   let detailClipBounds: { left: number; right: number; top: number; bottom: number } | null = null;
-  let globalHeightSampler: HeightSampler | null = null;
+  let lodHeightSampler: HeightSampler | null = null;
   let meshReference: TerrainReference | null = null;
   let meshOffset: [number, number, number] = [0, 0, 0];
   let meshScale = 1;
@@ -1879,59 +2079,62 @@ export function startTerrainPreview(
     })();
   };
 
-  const applyGlobalMesh = (mesh: TerrainMesh, tileZoom: number) => {
-    globalIndexCount = mesh.indices.length;
-    globalMeshReady = false;
+  const applyLodMesh = (lodMesh: LodMeshState, mesh: TerrainMesh, tileZoom: number, blendSource: boolean) => {
+    lodMesh.indexCount = mesh.indices.length;
+    lodMesh.meshReady = false;
     const needsUint32 = mesh.positions.length / 3 > 65535;
-    globalIndexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+    lodMesh.indexType = needsUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
     const indexData = needsUint32 ? mesh.indices : new Uint16Array(mesh.indices);
 
-    gl.bindVertexArray(globalVao);
+    gl.bindVertexArray(lodMesh.vao);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, globalVbo);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.vbo);
     gl.bufferData(gl.ARRAY_BUFFER, mesh.positions, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(positionLoc);
     gl.vertexAttribPointer(positionLoc, 3, gl.FLOAT, false, 0, 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, globalNbo);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.nbo);
     gl.bufferData(gl.ARRAY_BUFFER, mesh.normals, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(normalLoc);
     gl.vertexAttribPointer(normalLoc, 3, gl.FLOAT, false, 0, 0);
 
     const initialUvs = new Float32Array((mesh.positions.length / 3) * 2);
-    gl.bindBuffer(gl.ARRAY_BUFFER, globalUvbo);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.uvbo);
     gl.bufferData(gl.ARRAY_BUFFER, initialUvs, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(uvLoc);
     gl.vertexAttribPointer(uvLoc, 2, gl.FLOAT, false, 0, 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, globalSkbo);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.skbo);
     gl.bufferData(gl.ARRAY_BUFFER, mesh.skirtMask, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(skirtLoc);
     gl.vertexAttribPointer(skirtLoc, 1, gl.FLOAT, false, 0, 0);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, globalTbo);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.tbo);
     gl.bufferData(gl.ARRAY_BUFFER, mesh.tesseraCoords, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(tesseraLoc);
     gl.vertexAttribPointer(tesseraLoc, 2, gl.FLOAT, false, 0, 0);
 
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, globalIbo);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lodMesh.ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexData, gl.STATIC_DRAW);
 
     gl.bindVertexArray(null);
-    globalMeshReady = true;
-    globalHeightSampler = buildGlobalHeightSampler(mesh);
-    blendDetailToGlobal();
+    lodMesh.meshReady = true;
+
+    if (blendSource) {
+      lodHeightSampler = buildGlobalHeightSampler(mesh);
+      blendDetailToGlobal();
+    }
 
     void (async () => {
       const rasterZoom = Math.max(0, tileZoom + RASTER_ZOOM_OFFSET);
       const atlasResult = await buildRasterAtlas(gl, mesh.tesseraCoords, rasterZoom);
       if (!atlasResult) return;
-      if (globalAtlas?.texture) gl.deleteTexture(globalAtlas.texture);
-      globalAtlas = atlasResult;
+      if (lodMesh.atlas?.texture) gl.deleteTexture(lodMesh.atlas.texture);
+      lodMesh.atlas = atlasResult;
       const uvs = computeAtlasUVs(mesh.tesseraCoords, atlasResult);
-      gl.bindBuffer(gl.ARRAY_BUFFER, globalUvbo);
+      gl.bindBuffer(gl.ARRAY_BUFFER, lodMesh.uvbo);
       gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
-      globalTextureReady = true;
+      lodMesh.textureReady = true;
     })();
   };
 
@@ -1956,26 +2159,75 @@ export function startTerrainPreview(
     return null;
   };
 
-  const loadGlobal = async (centerLat: number, centerLon: number, originOffset: [number, number, number]) => {
-    const currentLoadId = ++globalLoadId;
-    try {
-      const layer = await getLayer();
-      const mesh = await loadTerrainMesh(
-        token,
-        centerLat,
-        centerLon,
-        GLOBAL_TERRAIN_ZOOM,
-        WORLD_BOUNDS,
-        layer,
-        undefined,
-        originOffset
-      );
-      if (currentLoadId !== globalLoadId) return;
-      globalTextureReady = false;
-      applyGlobalMesh(mesh, GLOBAL_TERRAIN_ZOOM);
-    } catch {
-      // Keep prior global mesh if new load fails.
+  const loadLodMeshes = async (
+    center: { lon: number; lat: number },
+    tileZoom: number,
+    originOffset: [number, number, number],
+    layer: TerrainLayer & { baseUrl: string; accessToken: string }
+  ) => {
+    const scheme = layer.scheme ?? "tms";
+    const projection = layer.projection ?? "EPSG:4326";
+    const reference: TerrainReference = {
+      lon: center.lon,
+      lat: center.lat,
+      lonRad: (center.lon * Math.PI) / 180,
+      latRad: (center.lat * Math.PI) / 180,
+      ecef: lonLatHeightToECEF(center.lon, center.lat, 0),
+    };
+    const maxZoom = Math.max(LOD_MIN_ZOOM, tileZoom - LOD_DETAIL_ZOOM_GAP);
+    const lodGroups = buildAdaptiveLodTiles(reference, maxZoom, projection, scheme);
+    const activeZooms = new Set<number>();
+    for (const [zoom, tiles] of lodGroups) {
+      if (tiles.length > 0) activeZooms.add(zoom);
     }
+
+    for (const [zoom, state] of lodMeshes.entries()) {
+      if (!activeZooms.has(zoom)) {
+        deleteLodState(state);
+        lodMeshes.delete(zoom);
+      }
+    }
+
+    lodMeshOrder = Array.from(activeZooms)
+      .sort((a, b) => a - b)
+      .map((zoom) => {
+        const state = getLodState(zoom);
+        state.zoom = zoom;
+        return state;
+      });
+
+    const blendZoom = lodMeshOrder.length > 0 ? lodMeshOrder[lodMeshOrder.length - 1]!.zoom : null;
+
+    await Promise.all(
+      lodMeshOrder.map(async (lodMesh) => {
+        const tiles = lodGroups.get(lodMesh.zoom);
+        if (!tiles || tiles.length === 0) {
+          lodMesh.meshReady = false;
+          lodMesh.textureReady = false;
+          return;
+        }
+        const currentLoadId = ++lodMesh.loadId;
+        try {
+          const mesh = await loadTerrainMesh(
+            token,
+            center.lat,
+            center.lon,
+            lodMesh.zoom,
+            undefined,
+            layer,
+            { lat: center.lat, lon: center.lon },
+            originOffset,
+            tiles
+          );
+          if (currentLoadId !== lodMesh.loadId) return;
+          if (lodMeshes.get(lodMesh.zoom) !== lodMesh) return;
+          lodMesh.textureReady = false;
+          applyLodMesh(lodMesh, mesh, lodMesh.zoom, blendZoom !== null && lodMesh.zoom === blendZoom);
+        } catch {
+          // Keep prior mesh if new load fails.
+        }
+      })
+    );
   };
 
   const viewsEqual = (a: TerrainView, b: TerrainView) => {
@@ -1994,7 +2246,7 @@ export function startTerrainPreview(
   };
 
   const applyView = async (view: TerrainView) => {
-    globalHeightSampler = null;
+    lodHeightSampler = null;
     detailClipBounds = null;
     const center = tesseraToLonLat(view.centerX, view.centerY);
     const west = tesseraToLonLat(view.bounds.left, view.centerY).lon;
@@ -2045,10 +2297,10 @@ export function startTerrainPreview(
         top: meshBounds.minY,
         bottom: meshBounds.maxY,
       };
-      if (globalHeightSampler) {
+      if (lodHeightSampler) {
         blendDetailToGlobal();
       }
-      await loadGlobal(center.lat, center.lon, detailMesh.offset);
+      await loadLodMeshes(center, tileZoom, detailMesh.offset, layer);
     }
   };
 
@@ -2089,7 +2341,7 @@ export function startTerrainPreview(
       !detailMeshData ||
       !detailBlendView ||
       !detailClipBounds ||
-      !globalHeightSampler ||
+      !lodHeightSampler ||
       !detailMeshReady ||
       !detailBasePositions
     ) {
@@ -2118,7 +2370,7 @@ export function startTerrainPreview(
       const tx = coords[i * 2] ?? 0;
       const ty = coords[i * 2 + 1] ?? 0;
       const dist = distanceToClipRects(tx, ty, clipRects);
-      const globalZ = globalHeightSampler.sample(tx, ty);
+      const globalZ = lodHeightSampler.sample(tx, ty);
       if (globalZ === null) continue;
       const zIndex = i * 3 + 2;
       if ((skirtMask[i] ?? 0) > 0) {
@@ -2151,7 +2403,29 @@ export function startTerrainPreview(
   void (async () => {
     const detailMesh = await loadDetail(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, TERRAIN_ZOOM);
     if (detailMesh) {
-      await loadGlobal(TERRAIN_CENTER.lat, TERRAIN_CENTER.lon, detailMesh.offset);
+      const layer = await getLayer();
+      const center = { lon: TERRAIN_CENTER.lon, lat: TERRAIN_CENTER.lat };
+      const tesseraCenter = lonLatToTessera(center.lon, center.lat);
+      const viewportWidth = Math.max(1, canvas.width);
+      const viewportHeight = Math.max(1, canvas.height);
+      const worldSize = TILE_SIZE * Math.pow(2, TERRAIN_ZOOM);
+      const viewWidth = viewportWidth / worldSize;
+      const viewHeight = viewportHeight / worldSize;
+      const bounds = {
+        left: tesseraCenter.x - viewWidth / 2,
+        right: tesseraCenter.x + viewWidth / 2,
+        top: tesseraCenter.y - viewHeight / 2,
+        bottom: tesseraCenter.y + viewHeight / 2,
+      };
+      const view: TerrainView = {
+        centerX: tesseraCenter.x,
+        centerY: tesseraCenter.y,
+        zoom: TERRAIN_ZOOM,
+        viewportWidth,
+        viewportHeight,
+        bounds,
+      };
+      await loadLodMeshes(center, TERRAIN_ZOOM, detailMesh.offset, layer);
     }
   })();
 
@@ -2283,7 +2557,8 @@ export function startTerrainPreview(
       gl.enable(gl.POLYGON_OFFSET_FILL);
       gl.polygonOffset(1, 1);
 
-      if (globalMeshReady) {
+      const drawLodMesh = (lodMesh: LodMeshState) => {
+        if (!lodMesh.meshReady) return;
         gl.uniform1i(clipCountLoc, clipCount);
         if (clipCount > 0) {
           const rect0 = clipRects[0]!;
@@ -2298,12 +2573,17 @@ export function startTerrainPreview(
           gl.uniform4f(clipRect0Loc, 0, 0, 0, 0);
           gl.uniform4f(clipRect1Loc, 0, 0, 0, 0);
         }
-        gl.uniform1f(textureMixLoc, globalTextureReady ? 1 : 0);
+        gl.uniform1f(textureMixLoc, lodMesh.textureReady ? 1 : 0);
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, globalTextureReady ? globalAtlas?.texture ?? fallbackTexture : fallbackTexture);
-        gl.bindVertexArray(globalVao);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, globalIbo);
-        gl.drawElements(gl.TRIANGLES, globalIndexCount, globalIndexType, 0);
+        gl.bindTexture(gl.TEXTURE_2D, lodMesh.textureReady ? lodMesh.atlas?.texture ?? fallbackTexture : fallbackTexture);
+        gl.bindVertexArray(lodMesh.vao);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lodMesh.ibo);
+        gl.drawElements(gl.TRIANGLES, lodMesh.indexCount, lodMesh.indexType, 0);
+      };
+
+      gl.uniform1f(skirtCutLoc, 0);
+      for (const lodMesh of lodMeshOrder) {
+        drawLodMesh(lodMesh);
       }
 
       gl.uniform1i(clipCountLoc, 0);
@@ -2553,19 +2833,14 @@ export function startTerrainPreview(
       gl.deleteBuffer(tbo);
       gl.deleteBuffer(fillIbo);
       if (vao) gl.deleteVertexArray(vao);
-      gl.deleteBuffer(globalVbo);
-      gl.deleteBuffer(globalNbo);
-      gl.deleteBuffer(globalUvbo);
-      gl.deleteBuffer(globalSkbo);
-      gl.deleteBuffer(globalTbo);
-      gl.deleteBuffer(globalIbo);
-      if (globalVao) gl.deleteVertexArray(globalVao);
+      for (const lodMesh of lodMeshes.values()) {
+        deleteLodState(lodMesh);
+      }
       if (aircraftVao) gl.deleteVertexArray(aircraftVao);
       gl.deleteBuffer(aircraftShapeBuffer);
       gl.deleteBuffer(aircraftNormalBuffer);
       gl.deleteBuffer(aircraftInstanceBuffer);
       if (detailAtlas?.texture) gl.deleteTexture(detailAtlas.texture);
-      if (globalAtlas?.texture) gl.deleteTexture(globalAtlas.texture);
       if (fallbackTexture) gl.deleteTexture(fallbackTexture);
       gl.deleteProgram(program);
       gl.deleteProgram(aircraftProgram);
